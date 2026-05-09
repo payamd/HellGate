@@ -19,7 +19,7 @@ import (
 	"golang.org/x/net/http2"
 )
 
-const frontedProbeOKBody = "GooseRelay forwarder OK"
+const frontedProbeOKBody = "HellGate forwarder OK"
 
 // FrontingConfig describes how to reach script.google.com without revealing
 // the real Host to a passive on-path observer: dial GoogleIP, do a TLS

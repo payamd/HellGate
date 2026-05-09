@@ -14,6 +14,9 @@ const (
 	FlagFIN = 1 << 1 // sender is closing its write side
 	FlagACK = 1 << 2 // ACK-only / keepalive (no payload, no SYN, no FIN)
 	FlagRST = 1 << 3 // session reset: sender has no state for this session (e.g. server restart)
+	// FlagDATAGRAM marks a best-effort UDP datagram (one logical datagram = one frame).
+	// Optional on the wire for TCP sessions; typically set on UDP-tunnel frames.
+	FlagDATAGRAM = 1 << 4
 )
 
 const (

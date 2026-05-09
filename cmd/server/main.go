@@ -1,4 +1,4 @@
-// GooseRelayVPN server (VPS exit): receives AES-encrypted frame batches from
+// HellGate server (VPS exit): receives AES-encrypted frame batches from
 // Apps Script, decrypts, and bridges to real upstream TCP targets.
 package main
 
@@ -8,8 +8,8 @@ import (
 	"net"
 	"strings"
 
-	"github.com/kianmhz/GooseRelayVPN/internal/config"
-	"github.com/kianmhz/GooseRelayVPN/internal/exit"
+	"github.com/payamd/HellGate/internal/config"
+	"github.com/payamd/HellGate/internal/exit"
 )
 
 func main() {
@@ -36,7 +36,7 @@ func main() {
 	_, port, _ := net.SplitHostPort(cfg.ListenAddr)
 	log.Printf("[exit] tunnel_key loaded (32 bytes)")
 	log.Printf("[exit] healthz: curl http://YOUR.VPS.IP:%s/healthz   (should return HTTP 200)", port)
-	log.Printf("[exit] tunnel : POST http://YOUR.VPS.IP:%s/tunnel    (this is the VPS_URL in Code.gs)", port)
+	log.Printf("[exit] tunnel : POST http://YOUR.VPS.IP:%s/tunnel    (this is RELAY_URL in Code.gs)", port)
 	if cfg.DebugTiming {
 		log.Printf("[exit] debug_timing enabled — per-session dial breakdown will be logged")
 	}
@@ -50,7 +50,7 @@ func main() {
 			log.Fatalf("port %s is already in use — another goose-server may be running.\n  Check with: sudo lsof -i :%s", port, port)
 		}
 		if strings.Contains(msg, "permission denied") {
-			log.Fatalf("permission denied binding %s — ports below 1024 require root, or pick a different server_port (e.g. 8443)", cfg.ListenAddr)
+			log.Fatalf("permission denied binding %s — ports below 1024 require root, or pick a different server_port (e.g. 9443)", cfg.ListenAddr)
 		}
 		log.Fatalf("listen: %v", err)
 	}

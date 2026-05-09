@@ -14,8 +14,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kianmhz/GooseRelayVPN/internal/frame"
-	"github.com/kianmhz/GooseRelayVPN/internal/session"
+	"github.com/payamd/HellGate/internal/frame"
+	"github.com/payamd/HellGate/internal/session"
 )
 
 const exitTimingTestKeyHex = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"

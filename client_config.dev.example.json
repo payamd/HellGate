@@ -1,0 +1,18 @@
+{
+  "_comment": "Optional reference for cmd/goose-client tests. Match tunnel_key to your server_config.json on the exit.",
+  "debug_timing": false,
+  "socks_host": "127.0.0.1",
+  "socks_port": 1080,
+  "google_host": "216.239.38.120",
+  "sni": ["www.google.com", "mail.google.com", "accounts.google.com"],
+  "script_keys": [
+    {"id": "REPLACE_WITH_DEV_APPS_SCRIPT_DEPLOYMENT_ID", "account": "dev"}
+  ],
+  "tunnel_key": "GENERATE_64_HEX_SAME_AS_SERVER_DEV",
+
+  "socks_user": "",
+  "socks_pass": "",
+
+  "coalesce_step_ms": 0,
+  "idle_slots_per_bucket": 1
+}

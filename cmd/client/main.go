@@ -1,4 +1,4 @@
-// GooseRelayVPN client: SOCKS5 listener that tunnels TCP through Apps Script.
+// HellGate client: SOCKS5 listener that tunnels TCP through Apps Script.
 package main
 
 import (
@@ -13,10 +13,10 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/kianmhz/GooseRelayVPN/internal/carrier"
-	"github.com/kianmhz/GooseRelayVPN/internal/config"
-	"github.com/kianmhz/GooseRelayVPN/internal/session"
-	"github.com/kianmhz/GooseRelayVPN/internal/socks"
+	"github.com/payamd/HellGate/internal/carrier"
+	"github.com/payamd/HellGate/internal/config"
+	"github.com/payamd/HellGate/internal/session"
+	"github.com/payamd/HellGate/internal/socks"
 )
 
 type clientLogWriter struct {
@@ -139,7 +139,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("%v", err)
 	}
-	log.Printf("[client] GooseRelayVPN client starting")
+	log.Printf("[client] HellGate client starting")
 	log.Printf("[client] config loaded from %s", *configPath)
 	log.Printf("[client] SOCKS5 proxy: socks5://%s", cfg.ListenAddr)
 	if cfg.UseFronting {

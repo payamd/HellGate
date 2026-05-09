@@ -250,7 +250,7 @@ func TestZstdFlagEmitted(t *testing.T) {
 	c := newTestCrypto(t)
 
 	// Highly compressible payload well above compressMinSize.
-	payload := bytes.Repeat([]byte("GooseRelayVPN zstd test payload — repeated for compressibility. "), 20)
+	payload := bytes.Repeat([]byte("HellGate zstd test payload — repeated for compressibility. "), 20)
 	if len(payload) < compressMinSize {
 		t.Fatalf("payload too small to trigger compression: %d < %d", len(payload), compressMinSize)
 	}

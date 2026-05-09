@@ -1,15 +1,16 @@
-// GooseRelay forwarder.
+// HellGate forwarder — **one URL carries TCP and UDP** (multiplexed in the
+// same encrypted batches). Exit: TCP for SOCKS CONNECT, UDP for udp:// targets.
 //
-// Apps Script web app deployed as: Execute as: Me, Access: Anyone (or Anyone with Google account).
+// Apps Script: Execute as: Me, Access: Anyone (or Anyone with Google account).
 // All traffic is AES-GCM encrypted by the client; this script is a dumb pipe
 // and never sees plaintext or holds the key.
 //
 // Wire: client POSTs base64(encrypted batch). We forward the bytes verbatim
 // to RELAY_URL and return its response body verbatim.
 //
-// Replace RELAY_URL with your VPS address before deploying.
+// RELAY must match server listen port (default **9443** — docker-compose.yml).
 
-const RELAY_URL = 'http://YOUR.VPS.IP:8443/tunnel';
+const RELAY_URL = 'http://YOUR_VPS.IP:9443/tunnel';
 
 function doPost(e) {
   bumpInvocationCount_();

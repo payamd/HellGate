@@ -1,0 +1,4 @@
+# Local secrets (never commit)
+/server_config.json
+/client_config.json
+/client_config.dev.json

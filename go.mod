@@ -1,4 +1,4 @@
-module github.com/kianmhz/GooseRelayVPN
+module github.com/payamd/HellGate
 
 go 1.22
 

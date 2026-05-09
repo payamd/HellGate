@@ -1,8 +1,6 @@
-# GooseRelayVPN
+# HellGate
 
-[![GitHub](https://img.shields.io/badge/GitHub-GooseRelayVPN-blue?logo=github)](https://github.com/kianmhz/GooseRelayVPN)
-
-**[🇮🇷 راهنمای فارسی (Persian)](README_FA.md)**
+[![GitHub](https://img.shields.io/badge/GitHub-HellGate-blue?logo=github)](https://github.com/payamd/HellGate)
 
 A SOCKS5 VPN that tunnels **raw TCP** through a Google Apps Script web app to your own small VPS exit server. To anything on the network path your client only ever talks TLS to a Google IP with `SNI=www.google.com`. Everything in flight is AES-256-GCM encrypted end-to-end — Google never sees plaintext and never holds the key.
 
@@ -35,7 +33,7 @@ You can also support the project financially:
 
 ## Disclaimer
 
-GooseRelayVPN is provided for educational, testing, and research purposes only.
+HellGate is provided for educational, testing, and research purposes only.
 
 - **Provided without warranty:** This software is provided "AS IS", without express or implied warranty, including merchantability, fitness for a particular purpose, and non-infringement.
 - **Limitation of liability:** The developers and contributors are not responsible for any direct, indirect, incidental, consequential, or other damages resulting from the use of this project.
@@ -54,7 +52,7 @@ Browser/App
   -> Zstd-compressed + AES-256-GCM frame batches
   -> HTTPS to a Google edge IP   (SNI=www.google.com, Host=script.google.com)
   -> Apps Script doPost()        (dumb forwarder, never sees plaintext)
-  -> Your VPS :8443/tunnel       (decrypts, demuxes by session_id, dials target)
+  -> Your VPS :9443/tunnel   (TCP HTTP relay; in-tunnel UDP demuxed at exit — see docker/README.md)
   <- Same path in reverse via long-polling
 ```
 
@@ -76,46 +74,47 @@ You need two separate programs:
 
 **Option A — Download a pre-built release (recommended):**
 
-1. Go to the [Releases page](https://github.com/kianmhz/GooseRelayVPN/releases).
+1. Go to the [Releases page](https://github.com/payamd/HellGate/releases).
 2. Download the right archive for your OS:
-   - Windows: `GooseRelayVPN-client-vX.Y.Z-windows-amd64.zip`
-   - macOS (Intel): `GooseRelayVPN-client-vX.Y.Z-darwin-amd64.tar.gz`
-   - macOS (M1/M2/M3): `GooseRelayVPN-client-vX.Y.Z-darwin-arm64.tar.gz`
-   - Linux: `GooseRelayVPN-client-vX.Y.Z-linux-amd64.tar.gz`
-   - Android / Termux (arm64): `GooseRelayVPN-client-vX.Y.Z-android-arm64.tar.gz`
+   - Windows: `HellGate-client-vX.Y.Z-windows-amd64.zip`
+   - macOS (Intel): `HellGate-client-vX.Y.Z-darwin-amd64.tar.gz`
+   - macOS (M1/M2/M3): `HellGate-client-vX.Y.Z-darwin-arm64.tar.gz`
+   - Linux: `HellGate-client-vX.Y.Z-linux-amd64.tar.gz`
+   - Android / Termux (arm64): `HellGate-client-vX.Y.Z-android-arm64.tar.gz`
 3. For the **server**, SSH into your VPS and download the binary for your server OS:
    - **Linux (most common):**
      ```bash
-     wget https://github.com/kianmhz/GooseRelayVPN/releases/latest/download/GooseRelayVPN-server-vX.Y.Z-linux-amd64.tar.gz
-     tar -xzf GooseRelayVPN-server-vX.Y.Z-linux-amd64.tar.gz
+     wget https://github.com/payamd/HellGate/releases/latest/download/HellGate-server-vX.Y.Z-linux-amd64.tar.gz
+     tar -xzf HellGate-server-vX.Y.Z-linux-amd64.tar.gz
      ```
-   - **Windows Server:** download `GooseRelayVPN-server-vX.Y.Z-windows-amd64.zip` from the Releases page and extract it to a folder such as `C:\goose-relay\`. See Step 8 (Windows) below for service setup.
+   - **Windows Server:** download `HellGate-server-vX.Y.Z-windows-amd64.zip` from the Releases page and extract it to a folder such as `C:\goose-relay\`. See Step 8 (Windows) below for service setup.
 
    (Replace `vX.Y.Z` with the latest version number from the Releases page.)
 
 > 💡 **If the Releases page doesn't open**, you can download directly using these links (replace `vX.Y.Z` with the latest version):
-> - **Client — Windows:** `https://github.com/Kianmhz/GooseRelayVPN/releases/download/vX.Y.Z/GooseRelayVPN-client-vX.Y.Z-windows-amd64.zip`
-> - **Client — macOS (Apple Silicon):** `https://github.com/Kianmhz/GooseRelayVPN/releases/download/vX.Y.Z/GooseRelayVPN-client-vX.Y.Z-darwin-arm64.tar.gz`
-> - **Client — macOS (Intel):** `https://github.com/Kianmhz/GooseRelayVPN/releases/download/vX.Y.Z/GooseRelayVPN-client-vX.Y.Z-darwin-amd64.tar.gz`
-> - **Client — Linux:** `https://github.com/Kianmhz/GooseRelayVPN/releases/download/vX.Y.Z/GooseRelayVPN-client-vX.Y.Z-linux-amd64.tar.gz`
-> - **Client — Android/Termux:** `https://github.com/Kianmhz/GooseRelayVPN/releases/download/vX.Y.Z/GooseRelayVPN-client-vX.Y.Z-android-arm64.tar.gz`
-> - **Server — Linux:** `https://github.com/Kianmhz/GooseRelayVPN/releases/download/vX.Y.Z/GooseRelayVPN-server-vX.Y.Z-linux-amd64.tar.gz`
+> - **Client — Windows:** `https://github.com/payamd/HellGate/releases/download/vX.Y.Z/HellGate-client-vX.Y.Z-windows-amd64.zip`
+> - **Client — macOS (Apple Silicon):** `https://github.com/payamd/HellGate/releases/download/vX.Y.Z/HellGate-client-vX.Y.Z-darwin-arm64.tar.gz`
+> - **Client — macOS (Intel):** `https://github.com/payamd/HellGate/releases/download/vX.Y.Z/HellGate-client-vX.Y.Z-darwin-amd64.tar.gz`
+> - **Client — Linux:** `https://github.com/payamd/HellGate/releases/download/vX.Y.Z/HellGate-client-vX.Y.Z-linux-amd64.tar.gz`
+> - **Client — Android/Termux:** `https://github.com/payamd/HellGate/releases/download/vX.Y.Z/HellGate-client-vX.Y.Z-android-arm64.tar.gz`
+> - **Server — Linux:** `https://github.com/payamd/HellGate/releases/download/vX.Y.Z/HellGate-server-vX.Y.Z-linux-amd64.tar.gz`
 
 **Option B — Build from source (Go 1.22+) — not recommended, may be unstable:**
 
 ```bash
-git clone https://github.com/kianmhz/GooseRelayVPN.git
-cd GooseRelayVPN
+git clone https://github.com/payamd/HellGate.git
+cd HellGate
 go build -o goose-client ./cmd/client
 go build -o goose-server ./cmd/server
 ```
 
-**Option C — Run only the server with Docker (GHCR):**
+**Option C — Run only the server with Docker:**
 
-If you prefer containers on your VPS, you can run `goose-server` directly from GHCR:
+From the cloned repo, build the image locally (there is no third-party registry image):
 
 ```bash
-docker pull ghcr.io/kianmhz/gooserelayvpn-server:latest
+docker compose build
+docker compose up -d
 ```
 
 ### Step 3: Generate a secret key
@@ -157,10 +156,13 @@ Open both files and paste your key into the `tunnel_key` field. Leave `script_ke
 ```json
 {
   "server_host": "0.0.0.0",
-  "server_port": 8443,
-  "tunnel_key":  "SAME_VALUE_AS_CLIENT"
+  "server_port": 9443,
+  "tunnel_key":  "SAME_VALUE_AS_CLIENT",
+  "upstream_proxy": ""
 }
 ```
+
+**`upstream_proxy`** must be **empty** for UDP egress. [`docker-compose.yml`](docker-compose.yml) publishes **9443** for TCP **and** UDP.
 
 ### Step 5: Set up the Google Apps Script
 
@@ -169,9 +171,9 @@ This is the free Google-side piece that hides your traffic.
 1. Go to [Google Apps Script](https://script.google.com/) and sign in.
 2. Click **New project**.
 3. Delete the default code and paste everything from [`apps_script/Code.gs`](apps_script/Code.gs).
-4. Change this line to your VPS IP:
+4. Set **`RELAY_URL`** to your exit (**9443** matches [`docker-compose.yml`](docker-compose.yml) and [`server_config.example.json`](server_config.example.json) — one URL for **TCP and UDP**):
    ```javascript
-   const VPS_URL = 'http://YOUR.VPS.IP:8443/tunnel';
+   const RELAY_URL = 'http://YOUR.VPS.IP:9443/tunnel';
    ```
 5. Click **Deploy → New deployment** → set type to **Web app**.
 6. Set **Execute as:** Me and **Who has access:** Anyone.
@@ -180,21 +182,21 @@ This is the free Google-side piece that hides your traffic.
 
 > ⚠️ Every time you edit `Code.gs` you must create a **new deployment** (Deploy → **New deployment**) and update `script_keys`. Just saving the code is not enough.
 
-### Step 6: Open port 8443 on your VPS firewall
+### Step 6: Open the relay port on your VPS firewall
 
-The server needs port 8443 to be reachable from the internet. On your VPS run:
-
-```bash
-sudo ufw allow 8443/tcp
-```
-
-Then verify it works from your own computer (replace with your real VPS IP):
+Open **9443/tcp** (same port as **`RELAY_URL`** and **`server_port`**):
 
 ```bash
-curl http://YOUR.VPS.IP:8443/healthz
+sudo ufw allow 9443/tcp
 ```
 
-You should get an empty response with HTTP 200. If `curl` times out or refuses, also check your **cloud provider's firewall** (called "Security Groups" on AWS/Hetzner, "Firewall Rules" on DigitalOcean/Vultr, etc.) and add an inbound rule for TCP port 8443.
+Verify:
+
+```bash
+curl http://YOUR.VPS.IP:9443/healthz
+```
+
+You should get an empty response with HTTP 200. If `curl` times out or refuses, also check your **cloud provider's firewall** (called "Security Groups" on AWS/Hetzner, "Firewall Rules" on DigitalOcean/Vultr, etc.).
 
 ### Step 7: Start the server on your VPS
 
@@ -212,37 +214,34 @@ On your VPS, run the server binary:
 
 You should see it print the listening address and the healthz/tunnel URLs. Leave this terminal open, or set up the systemd/NSSM service (Step 8) to keep it running after reboots.
 
-**Docker (GHCR image):**
+**Docker (local image built from this repo):**
 
-> ⚠️ **Important:** The container does **not** auto-generate `server_config.json`. You must create and edit `server_config.json` first (with your own `tunnel_key`), then start the container.
+> ⚠️ **Important:** The container does **not** auto-generate `server_config.json`. Create and edit `server_config.json` first (with your own `tunnel_key`), then start the container.
 
 ```bash
+docker compose build
 docker run -d \
-  --name goose-server \
+  --name hellgate \
   --restart unless-stopped \
-  -p 8443:8443 \
+  -p 9443:9443 \
   -v $(pwd)/server_config.json:/app/server_config.json:ro \
-  ghcr.io/kianmhz/gooserelayvpn-server:latest
+  hellgate-server:latest
 ```
 
-**Docker Compose (recommended for container setup):**
+**Docker Compose** (TCP + UDP, recommended):
 
 ```bash
 cp server_config.example.json server_config.json
 nano server_config.json
-docker compose up -d
+docker compose up -d --build
 ```
 
-The repo includes [`docker-compose.yml`](docker-compose.yml). By default it uses `ghcr.io/kianmhz/gooserelayvpn-server:latest`, and you can override it with:
-
-```bash
-GOOSE_SERVER_IMAGE=ghcr.io/kianmhz/gooserelayvpn-server:vX.Y.Z docker compose up -d
-```
+See [`docker/README.md`](docker/README.md). Shortcut: **`make docker`**.
 
 Verify from your own computer:
 
 ```bash
-curl http://YOUR.VPS.IP:8443/healthz
+curl http://YOUR.VPS.IP:9443/healthz
 ```
 
 ### Step 8: Keep the server running after reboot (systemd)
@@ -252,14 +251,14 @@ If you want the exit server to start automatically after a VPS reboot, create a 
 Run on your VPS:
 
 ```bash
-sudo nano /etc/systemd/system/goose-relay.service
+sudo nano /etc/systemd/system/hellgate.service
 ```
 
 Paste this (adjust the path if your binary is in a different location):
 
 ```ini
 [Unit]
-Description=GooseRelayVPN exit server
+Description=HellGate exit server
 After=network.target
 
 [Service]
@@ -279,42 +278,42 @@ Then run:
 
 ```bash
 sudo systemctl daemon-reload
-sudo systemctl enable goose-relay
-sudo systemctl start goose-relay
-sudo systemctl status goose-relay --no-pager
+sudo systemctl enable hellgate
+sudo systemctl start hellgate
+sudo systemctl status hellgate --no-pager
 ```
 
 ### Step 8 (Windows): Keep the server running after reboot (NSSM)
 
 If your VPS runs **Windows Server**, use [NSSM](https://nssm.cc) (Non-Sucking Service Manager) to register `goose-server` as a Windows service instead of systemd. The `goose-server.exe` binary is a plain Go binary — no installer needed.
 
-**1. Open port 8443 in Windows Firewall** (run as Administrator in Command Prompt):
+**1. Open port 9443 in Windows Firewall** (run as Administrator in Command Prompt) when the server listens on 9443:
 ```cmd
-netsh advfirewall firewall add rule name="GooseRelayVPN" protocol=TCP dir=in localport=8443 action=allow
+netsh advfirewall firewall add rule name="HellGate" protocol=TCP dir=in localport=9443 action=allow
 ```
-Also add an inbound TCP/8443 rule in your cloud provider's firewall panel (Security Groups / Firewall Rules).
+For a bare binary listening directly on `server_port`, open that port instead. Also add a matching inbound rule in your cloud provider's firewall panel (Security Groups / Firewall Rules).
 
 **2. Download NSSM** from https://nssm.cc/download, extract it, and note the path to `nssm.exe` (e.g. `C:\nssm\win64\nssm.exe`).
 
 **3. Register and start the service** (run as Administrator):
 ```cmd
-C:\nssm\win64\nssm.exe install GooseRelayVPN "C:\goose-relay\goose-server.exe"
-C:\nssm\win64\nssm.exe set GooseRelayVPN AppParameters "-config C:\goose-relay\server_config.json"
-C:\nssm\win64\nssm.exe set GooseRelayVPN AppDirectory "C:\goose-relay"
-C:\nssm\win64\nssm.exe set GooseRelayVPN Start SERVICE_AUTO_START
-C:\nssm\win64\nssm.exe start GooseRelayVPN
+C:\nssm\win64\nssm.exe install HellGate "C:\goose-relay\goose-server.exe"
+C:\nssm\win64\nssm.exe set HellGate AppParameters "-config C:\goose-relay\server_config.json"
+C:\nssm\win64\nssm.exe set HellGate AppDirectory "C:\goose-relay"
+C:\nssm\win64\nssm.exe set HellGate Start SERVICE_AUTO_START
+C:\nssm\win64\nssm.exe start HellGate
 ```
 
 **4. Verify it is running:**
 ```cmd
-C:\nssm\win64\nssm.exe status GooseRelayVPN
-curl http://YOUR.VPS.IP:8443/healthz
+C:\nssm\win64\nssm.exe status HellGate
+curl http://YOUR.VPS.IP:9443/healthz
 ```
 
 To stop or uninstall later:
 ```cmd
-C:\nssm\win64\nssm.exe stop GooseRelayVPN
-C:\nssm\win64\nssm.exe remove GooseRelayVPN confirm
+C:\nssm\win64\nssm.exe stop HellGate
+C:\nssm\win64\nssm.exe remove HellGate confirm
 ```
 
 ### Step 9: Run the client on your computer
@@ -326,7 +325,7 @@ C:\nssm\win64\nssm.exe remove GooseRelayVPN confirm
 You should see output like this:
 
 ```
-CLIENT  INFO    GooseRelayVPN client starting
+CLIENT  INFO    HellGate client starting
 CLIENT  INFO    SOCKS5 proxy: socks5://127.0.0.1:1080
 CLIENT  INFO    pre-flight OK: relay healthy, AES key matches end-to-end
 CLIENT  INFO    ready: local SOCKS5 is listening on 127.0.0.1:1080
@@ -354,9 +353,9 @@ pkg install wget tar -y
 
 **2. Download and extract the client:**
 ```bash
-wget https://github.com/Kianmhz/GooseRelayVPN/releases/latest/download/GooseRelayVPN-client-v1.4.1-android-arm64.tar.gz
-tar -xzvf GooseRelayVPN-client-v1.4.1-android-arm64.tar.gz
-cd GooseRelayVPN-client-v1.4.1-android-arm64/
+wget https://github.com/payamd/HellGate/releases/latest/download/HellGate-client-v1.4.1-android-arm64.tar.gz
+tar -xzvf HellGate-client-v1.4.1-android-arm64.tar.gz
+cd HellGate-client-v1.4.1-android-arm64/
 chmod +x goose-client
 ```
 
@@ -448,9 +447,9 @@ What the client does for you automatically:
 | Field | Default | What it does |
 |---|---|---|
 | `server_host` | `0.0.0.0` | Host/IP where the exit server binds. |
-| `server_port` | `8443` | Port where the exit server listens. Must be reachable from Google's network. |
+| `server_port` | `9443` (example) | TCP port where the HTTP `/tunnel` handler listens. Match [`server_config.example.json`](server_config.example.json), `RELAY_URL` in [`Code.gs`](apps_script/Code.gs), and your firewall. |
 | `tunnel_key` | — | 64-char hex AES-256 key. Must match the client. |
-| `upstream_proxy` | *(optional)* | Route all outbound connections through a local SOCKS5 proxy. Useful when your VPS datacenter IP is blocked by certain sites. Set to `socks5://127.0.0.1:40000` to use Cloudflare WARP (DNS is resolved by the proxy, so target sites see the Cloudflare IP instead of your VPS IP). Leave empty or omit to dial directly. |
+| `upstream_proxy` | *(optional)* | Route **TCP** outbound dials through a local SOCKS5 proxy when set. **Must be empty** if you rely on in-tunnel **UDP** (`udp://…` targets) — SOCKS upstream does not support UDP yet. Leave empty or omit for direct dial (TCP and UDP). |
 | `debug_timing` | `false` | When `true`, logs per-session DNS and TCP dial latency so you can pinpoint where time is going. |
 
 ---
@@ -493,7 +492,7 @@ Key invariants:
 ## Project Files
 
 ```
-GooseRelayVPN/
+HellGate/
 ├── cmd/
 │   ├── client/main.go              # Entry point: SOCKS5 listener + carrier loop
 │   └── server/main.go              # Entry point: VPS HTTP handler
@@ -511,11 +510,16 @@ GooseRelayVPN/
 │   ├── baselines/                  # Committed baseline JSON files
 │   └── bench.sh                   # Build + run + compare orchestrator
 ├── apps_script/
-│   └── Code.gs                     # ~30-line dumb forwarder
+│   └── Code.gs                     # RELAY_URL → VPS :9443 (TCP relay; carries TCP + in-tunnel UDP)
+├── docker/
+│   └── README.md                   # Docker: TCP :9443 relay + cgroup notes
+├── docker-compose.yml              # HellGate: TCP :9443 (HTTP `/tunnel`; see docker/README.md)
 ├── scripts/
-│   └── goose-relay.service         # systemd unit template
+│   └── hellgate.service             # systemd unit template
 ├── client_config.example.json
-└── server_config.example.json
+├── client_config.dev.example.json  # optional reference for cmd/goose-client
+├── server_config.example.json
+└── Dockerfile
 ```
 
 ---
@@ -529,10 +533,10 @@ GooseRelayVPN/
 | `cannot execute binary file: Exec format error` when running `goose-server` or `goose-client` | You downloaded the wrong archive for your OS/architecture. The folder name tells you what you got — e.g. `…-darwin-amd64` is a **macOS** binary and won't run on Linux. Re-download the matching archive (Linux VPS → `linux-amd64`; Apple Silicon Mac → `darwin-arm64`; Termux → `android-arm64`). |
 | Pre-flight fails: `cannot reach Apps Script` | Your internet connection can't reach Google. Check `google_host` — try a different IP from the 216.239.x.120 range. |
 | Pre-flight fails: `HTTP 204 — key mismatch` | The `tunnel_key` in `client_config.json` doesn't match the one in `server_config.json` on the VPS. They must be byte-identical. |
-| Pre-flight fails: `Apps Script cannot reach your VPS` | Port 8443 on your VPS is not reachable. Run `sudo ufw allow 8443/tcp` on the VPS and check your cloud provider's firewall rules. |
+| Pre-flight fails: `Apps Script cannot reach your VPS` | The relay port in `RELAY_URL` (**9443/tcp** by default) is not reachable from Google. Open that TCP port (`ufw` + cloud firewall) and `curl http://YOUR.VPS.IP:9443/healthz`. |
 | Log says `relay returned non-batch payload` | Apps Script returned an HTML page instead of an encrypted batch. Three common causes: (1) the deployment in `script_keys` isn't live, or **Who has access** is not set to `Anyone` — re-deploy (Deploy → **New deployment**) and update `script_keys`; (2) the deployment was added to an existing Apps Script project alongside other files — create a **new** project with only `Code.gs` in it, then deploy from there; (3) you have multiple deployments under the same Google account and are hitting that account's per-second concurrency cap — label `script_keys` entries with their `account` so the client throttles per-account (see [Increase capacity with multiple deployments](#increase-capacity-with-multiple-deployments)). |
 | Log says `relay returned HTTP 404 via …` | The Deployment ID in your config doesn't match a live `/exec`. Re-deploy and update the config. |
-| Log says `relay returned HTTP 500 via …` | Apps Script can't reach `VPS_URL`. Check the server address in `Code.gs`, confirm the VPS is up, and confirm inbound TCP/8443 is open. `curl http://your.vps.ip:8443/healthz` should return 200. |
+| Log says `relay returned HTTP 500 via …` | Apps Script can't reach `RELAY_URL`. Check host/port match the running exit, firewall, and `curl http://your.vps.ip:9443/healthz` (or whatever `server_port` you use). |
 | Log says `relay request failed via …: timeout` | Fronted connection to Google is failing. Try a different `google_host` — any 216.239.x.120 served by Google works. |
 | Browser hangs on every request | Make sure your browser extension uses SOCKS5 with **DNS through proxy** enabled (not plain SOCKS5). In Firefox, check **Proxy DNS when using SOCKS v5**. |
 | `[exit] dial X: ... timeout` on the VPS server logs | The target host blocks datacenter IPs, or your VPS has no outbound connectivity for that port. |

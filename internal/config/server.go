@@ -75,7 +75,7 @@ func LoadServer(path string) (*Server, error) {
 	listenHost := firstNonEmpty(f.ServerHost, legacyHost, "0.0.0.0")
 	listenPort := firstPositive(f.ServerPort, legacyPort)
 	if listenPort == 0 {
-		listenPort = 8443
+		listenPort = 9443
 	}
 	if listenPort < 1 || listenPort > 65535 {
 		return nil, fmt.Errorf("server_port %d is out of range (must be 1-65535)", listenPort)

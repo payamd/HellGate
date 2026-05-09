@@ -1,9 +1,23 @@
+# HellGate — **TCP + UDP** on one port (default **9443**).
+# Client (Demonica UDP flavor + new `Code.gs` deployment) encrypts everything;
+# Apps Script only forwards bytes to this container.
+#
+#   cp server_config.example.json server_config.json
+#   # openssl rand -hex 32 → tunnel_key; keep upstream_proxy empty for UDP egress
+#   docker compose up -d --build
+#   curl -sS http://127.0.0.1:9443/healthz
+#
+# Apps Script RELAY_URL must be http://YOUR_HOST:9443/tunnel
+
 services:
-  goose-server:
-    image: ${GOOSE_SERVER_IMAGE:-ghcr.io/kianmhz/gooserelayvpn-server:latest}
-    container_name: goose-server
+  hellgate:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: hellgate-server:latest
+    container_name: hellgate
     restart: unless-stopped
     ports:
-      - "8443:8443"
+      - "9443:9443"
     volumes:
       - ./server_config.json:/app/server_config.json:ro

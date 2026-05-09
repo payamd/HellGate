@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kianmhz/GooseRelayVPN/internal/frame"
+	"github.com/payamd/HellGate/internal/frame"
 )
 
 func sid(b byte) [frame.SessionIDLen]byte {

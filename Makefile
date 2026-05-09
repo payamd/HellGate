@@ -2,9 +2,13 @@ VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS := -s -w -X main.version=$(VERSION)
 GO ?= go
 
-.PHONY: all build client server test race vet tidy clean release-local bench bench-update
+.PHONY: all build client server test race vet tidy clean release-local bench bench-update docker
 
 all: build
+
+# HellGate Docker: TCP + UDP on host :9443 (see docker-compose.yml)
+docker:
+	docker compose up -d --build
 
 build: client server
 
@@ -47,8 +51,8 @@ release-local:
 	  plat=$$os-$$arch$$([ -n "$$arm" ] && echo "v$$arm" || true); \
 	  ext=$$([ "$$os" = "windows" ] && echo ".exe" || echo ""); \
 	  echo "==> $$plat"; \
-	  client_name=GooseRelayVPN-client-$(VERSION)-$$plat; \
-	  server_name=GooseRelayVPN-server-$(VERSION)-$$plat; \
+	  client_name=HellGate-client-$(VERSION)-$$plat; \
+	  server_name=HellGate-server-$(VERSION)-$$plat; \
 	  mkdir -p dist/$$client_name dist/$$server_name; \
 	  CGO_ENABLED=0 GOOS=$$os GOARCH=$$arch GOARM=$$arm $(GO) build -trimpath -ldflags "$(LDFLAGS)" -o dist/$$client_name/goose-client$$ext ./cmd/client; \
 	  cp client_config.example.json dist/$$client_name/; \

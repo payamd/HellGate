@@ -5,6 +5,7 @@
 package exit
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -17,8 +18,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/kianmhz/GooseRelayVPN/internal/frame"
-	"github.com/kianmhz/GooseRelayVPN/internal/session"
+	"github.com/payamd/HellGate/internal/frame"
+	"github.com/payamd/HellGate/internal/session"
 	"golang.org/x/net/proxy"
 )
 
@@ -114,7 +115,7 @@ const (
 
 // Config is the VPS server's configuration.
 type Config struct {
-	ListenAddr    string // "0.0.0.0:8443"
+	ListenAddr    string // "0.0.0.0:9443"
 	AESKeyHex     string // 64-char hex
 	DebugTiming   bool   // when true, log per-session dial breakdown and first-read latency
 	UpstreamProxy string // optional "host:port" of a local SOCKS5 proxy (e.g. WARP on 127.0.0.1:40000)
@@ -130,8 +131,10 @@ type Server struct {
 
 	mu            sync.Mutex
 	sessions      map[[frame.SessionIDLen]byte]*session.Session
+	udpSessions   map[[frame.SessionIDLen]byte]*udpSession
 	sessionOwners map[[frame.SessionIDLen]byte][frame.ClientIDLen]byte // sessionID -> owning clientID
-	txReady       map[[frame.SessionIDLen]byte]struct{}                // sessions with pending TX frames
+	txReady       map[[frame.SessionIDLen]byte]struct{}                // TCP sessions with pending TX frames
+	udpReady      map[[frame.SessionIDLen]byte]struct{}                // UDP sessions with pending downstream datagrams
 	firstReply    map[[frame.SessionIDLen]byte]struct{}                // sessions whose first downstream batch hasn't been sent yet
 	upstreams     map[[frame.SessionIDLen]byte]net.Conn                // upstream conn per session, kept so GC can force-close
 	lastActivity  map[[frame.SessionIDLen]byte]time.Time               // last time the client sent a frame for this session
@@ -180,8 +183,10 @@ func New(cfg Config) (*Server, error) {
 		dns:           newDNSCache(),
 		debugTiming:   cfg.DebugTiming,
 		sessions:      make(map[[frame.SessionIDLen]byte]*session.Session),
+		udpSessions:   make(map[[frame.SessionIDLen]byte]*udpSession),
 		sessionOwners: make(map[[frame.SessionIDLen]byte][frame.ClientIDLen]byte),
 		txReady:       make(map[[frame.SessionIDLen]byte]struct{}),
+		udpReady:      make(map[[frame.SessionIDLen]byte]struct{}),
 		firstReply:    make(map[[frame.SessionIDLen]byte]struct{}),
 		upstreams:     make(map[[frame.SessionIDLen]byte]net.Conn),
 		lastActivity:  make(map[[frame.SessionIDLen]byte]time.Time),
@@ -408,7 +413,7 @@ func (s *Server) drainWindow(rxFrames []*frame.Frame) time.Duration {
 // 25ms because they are bulk-dominant and benefit from extra throughput.
 func (s *Server) coalesceDuration(currentFrames int) time.Duration {
 	s.mu.Lock()
-	sessionCount := len(s.sessions)
+	sessionCount := len(s.sessions) + len(s.udpSessions)
 	s.mu.Unlock()
 	if sessionCount >= busySessionThreshold && currentFrames < maxDrainFramesPerBatch/2 {
 		return coalesceWindowBusy
@@ -422,11 +427,16 @@ func (s *Server) coalesceDuration(currentFrames int) time.Duration {
 // they come from a different client (collision or spoof).
 func (s *Server) routeIncoming(f *frame.Frame, owner [frame.ClientIDLen]byte) {
 	s.mu.Lock()
-	sess, exists := s.sessions[f.SessionID]
+	sess, tcpExists := s.sessions[f.SessionID]
+	us, udpExists := s.udpSessions[f.SessionID]
 	existingOwner, hasOwner := s.sessionOwners[f.SessionID]
 	s.mu.Unlock()
 
-	if exists && hasOwner && existingOwner != owner {
+	if tcpExists && udpExists {
+		log.Printf("[exit] internal: session %x registered as both TCP and UDP", f.SessionID[:4])
+	}
+
+	if hasOwner && existingOwner != owner {
 		// Different client claiming an active session ID — astronomically
 		// unlikely with random 16-byte IDs, but possible if a client reused an
 		// ID from a previous process. Reject to keep clients isolated.
@@ -437,6 +447,26 @@ func (s *Server) routeIncoming(f *frame.Frame, owner [frame.ClientIDLen]byte) {
 		return
 	}
 
+	if udpExists {
+		if f.HasFlag(frame.FlagSYN) {
+			return
+		}
+		if f.HasFlag(frame.FlagFIN) || f.HasFlag(frame.FlagRST) {
+			us.closeAndUnregister(s)
+			return
+		}
+		if len(f.Payload) > 0 {
+			us.writeUpstream(f.Payload)
+		}
+		s.mu.Lock()
+		if _, still := s.udpSessions[f.SessionID]; still {
+			s.lastActivity[f.SessionID] = time.Now()
+		}
+		s.mu.Unlock()
+		return
+	}
+
+	exists := tcpExists
 	if !exists {
 		if !f.HasFlag(frame.FlagSYN) {
 			log.Printf("[exit] frame for unknown session (no SYN), sending RST")
@@ -448,6 +478,26 @@ func (s *Server) routeIncoming(f *frame.Frame, owner [frame.ClientIDLen]byte) {
 			log.Printf("[exit] dial suppressed for %s (recent failure backoff); sending RST", f.Target)
 			s.queueRST(owner, f.SessionID)
 			s.stats.rstSent.Add(1)
+			return
+		}
+		if _, isUDP := udpStripPrefix(f.Target); isUDP {
+			nus, err := s.openUDPSession(f.SessionID, f.Target, owner)
+			if err != nil {
+				s.recordDialFailure(f.Target, err)
+				s.stats.dialsFail.Add(1)
+				log.Printf("[exit] udp dial %s: %v", f.Target, err)
+				return
+			}
+			s.stats.dialsOK.Add(1)
+			s.clearDialFailure(f.Target)
+			if len(f.Payload) > 0 {
+				nus.writeUpstream(f.Payload)
+			}
+			s.mu.Lock()
+			if _, still := s.udpSessions[f.SessionID]; still {
+				s.lastActivity[f.SessionID] = time.Now()
+			}
+			s.mu.Unlock()
 			return
 		}
 		var err error
@@ -616,7 +666,7 @@ func (s *Server) drainAll(owner [frame.ClientIDLen]byte, byteBudget int) ([]*fra
 		urgent = true // RSTs are always urgent — client should know immediately
 	}
 	batchCap := maxDrainFramesPerBatch
-	if len(s.sessions) >= busySessionThreshold {
+	if len(s.sessions)+len(s.udpSessions) >= busySessionThreshold {
 		batchCap = maxDrainFramesPerBatchBusy
 	}
 	remaining := batchCap
@@ -684,6 +734,56 @@ func (s *Server) drainAll(owner [frame.ClientIDLen]byte, byteBudget int) ([]*fra
 		out = append(out, frames...)
 		remaining -= len(frames)
 	}
+
+	// UDP downstream: one logical datagram → one frame (FlagDATAGRAM).
+	type udpRef struct {
+		id [frame.SessionIDLen]byte
+	}
+	udpRefs := make([]udpRef, 0, len(s.udpReady))
+	for id := range s.udpReady {
+		if _, ok := s.udpSessions[id]; !ok {
+			delete(s.udpReady, id)
+			continue
+		}
+		if s.sessionOwners[id] != owner {
+			continue
+		}
+		udpRefs = append(udpRefs, udpRef{id: id})
+	}
+	sort.Slice(udpRefs, func(i, j int) bool {
+		return bytes.Compare(udpRefs[i].id[:], udpRefs[j].id[:]) < 0
+	})
+	for _, r := range udpRefs {
+		id := r.id
+		if remaining <= 0 || remainingBytes <= 0 {
+			break
+		}
+		us, ok := s.udpSessions[id]
+		if !ok {
+			delete(s.udpReady, id)
+			continue
+		}
+		perSessionCap := maxDrainFramesPerSession
+		if remaining < perSessionCap {
+			perSessionCap = remaining
+		}
+		frames := us.drainFrames(perSessionCap)
+		if !us.hasPendingDown() {
+			delete(s.udpReady, id)
+		}
+		if len(frames) > 0 {
+			if _, isFirst := s.firstReply[id]; isFirst {
+				urgent = true
+				delete(s.firstReply, id)
+			}
+			s.lastActivity[id] = time.Now()
+			for _, f := range frames {
+				remainingBytes -= len(f.Payload)
+			}
+		}
+		out = append(out, frames...)
+		remaining -= len(frames)
+	}
 	return out, urgent
 }
 
@@ -722,20 +822,31 @@ func (s *Server) gcDoneSessions() {
 // connections to long-lived targets (Telegram, websockets, etc.) would
 // otherwise leak forever.
 func (s *Server) gcIdleSessions() {
-	threshold := time.Now().Add(-idleSessionTimeout)
+	tcpThreshold := time.Now().Add(-idleSessionTimeout)
+	udpThreshold := time.Now().Add(-udpIdleTimeout)
 
-	type victim struct {
+	type tcpVictim struct {
 		id       [frame.SessionIDLen]byte
 		sess     *session.Session
 		upstream net.Conn
 		target   string
 		idleFor  time.Duration
 	}
-	var victims []victim
+	var tcpVictims []tcpVictim
+	var udpClose []*udpSession
 
 	s.mu.Lock()
 	for id, last := range s.lastActivity {
-		if last.After(threshold) {
+		if us, ok := s.udpSessions[id]; ok {
+			if last.After(udpThreshold) {
+				continue
+			}
+			udpClose = append(udpClose, us)
+			delete(s.udpSessions, id)
+			delete(s.sessionOwners, id)
+			delete(s.udpReady, id)
+			delete(s.firstReply, id)
+			delete(s.lastActivity, id)
 			continue
 		}
 		sess, ok := s.sessions[id]
@@ -743,7 +854,10 @@ func (s *Server) gcIdleSessions() {
 			delete(s.lastActivity, id)
 			continue
 		}
-		victims = append(victims, victim{
+		if last.After(tcpThreshold) {
+			continue
+		}
+		tcpVictims = append(tcpVictims, tcpVictim{
 			id:       id,
 			sess:     sess,
 			upstream: s.upstreams[id],
@@ -759,7 +873,14 @@ func (s *Server) gcIdleSessions() {
 	}
 	s.mu.Unlock()
 
-	for _, v := range victims {
+	for _, us := range udpClose {
+		log.Printf("[exit] GC orphaned udp session %x (target=%s)",
+			us.id[:4], us.target)
+		us.idleReapFinish()
+		s.stats.sessionsClose.Add(1)
+	}
+
+	for _, v := range tcpVictims {
 		log.Printf("[exit] GC orphaned session %x (target=%s, idle for %s)",
 			v.id[:4], v.target, v.idleFor.Round(time.Second))
 		// Closing upstream causes the read goroutine in openSession to error

@@ -1,5 +1,5 @@
 [Unit]
-Description=GooseRelayVPN exit server
+Description=HellGate exit server
 After=network.target
 StartLimitIntervalSec=60
 StartLimitBurst=5
