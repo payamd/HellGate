@@ -1,8 +1,8 @@
 // harness drives a loopback end-to-end benchmark for relay-tunnel.
 //
-// It owns three child processes: the bench sink (upstream targets), goose-server
+// It owns three child processes: the bench sink (upstream targets), hellgate-server
 // (the VPS exit), and goose-client (the local SOCKS5 listener). The client is
-// pointed at goose-server directly via the relay_urls config affordance, which
+// pointed at hellgate-server directly via the relay_urls config affordance, which
 // bypasses Apps Script entirely so results are reproducible.
 //
 // Each scenario is a Go function that drives traffic through the local SOCKS5
@@ -85,7 +85,7 @@ func main() {
 
 	var (
 		clientBin   = flag.String("client-bin", "", "path to goose-client binary")
-		serverBin   = flag.String("server-bin", "", "path to goose-server binary")
+		serverBin   = flag.String("server-bin", "", "path to hellgate-server binary")
 		sinkBin     = flag.String("sink-bin", "", "path to bench sink binary")
 		outPath     = flag.String("out", "", "where to write the results JSON")
 		ref         = flag.String("ref", "", "ref label to record in JSON (e.g. v1.3.0, HEAD)")

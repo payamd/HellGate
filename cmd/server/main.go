@@ -47,7 +47,7 @@ func main() {
 	if err := srv.ListenAndServe(); err != nil {
 		msg := err.Error()
 		if strings.Contains(msg, "address already in use") {
-			log.Fatalf("port %s is already in use — another goose-server may be running.\n  Check with: sudo lsof -i :%s", port, port)
+			log.Fatalf("port %s is already in use — another hellgate-server may be running.\n  Check with: sudo lsof -i :%s", port, port)
 		}
 		if strings.Contains(msg, "permission denied") {
 			log.Fatalf("permission denied binding %s — ports below 1024 require root, or pick a different server_port (e.g. 9443)", cfg.ListenAddr)

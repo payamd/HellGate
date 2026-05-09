@@ -1,7 +1,7 @@
 # Bench
 
 Loopback end-to-end benchmark harness for relay-tunnel. Runs `goose-client`
-and `goose-server` locally, pointing the client at the server directly via the
+and `hellgate-server` locally, pointing the client at the server directly via the
 `relay_urls` config affordance — Apps Script is deliberately excluded so
 results are reproducible and reflect code changes, not Google's CDN behaviour.
 

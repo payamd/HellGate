@@ -70,7 +70,7 @@ You need a Linux VPS with a public IP. Any provider works.
 
 You need two separate programs:
 - **`goose-client`** — runs on **your own computer**. This is what you run every day.
-- **`goose-server`** — runs on **your VPS**. You set it up once and leave it running.
+- **`hellgate-server`** — runs on **your VPS**. You set it up once and leave it running.
 
 **Option A — Download a pre-built release (recommended):**
 
@@ -105,7 +105,7 @@ You need two separate programs:
 git clone https://github.com/payamd/HellGate.git
 cd HellGate
 go build -o goose-client ./cmd/client
-go build -o goose-server ./cmd/server
+go build -o hellgate-server ./cmd/server
 ```
 
 **Option C — Run only the server with Docker:**
@@ -162,7 +162,7 @@ Open both files and paste your key into the `tunnel_key` field. Leave `script_ke
 }
 ```
 
-**`upstream_proxy`** must be **empty** for UDP egress. [`docker-compose.yml`](docker-compose.yml) publishes **9443** for TCP **and** UDP.
+**`upstream_proxy`** must be **empty** for UDP egress. **[`docker-compose.yml`](docker-compose.yml)** publishes **9443** for this relay (TCP HTTP `/tunnel`; in-tunnel UDP demuxed at exit). A legacy **8443** exit, if any, is **not** part of this file — run it however you like on the side.
 
 ### Step 5: Set up the Google Apps Script
 
@@ -184,7 +184,7 @@ This is the free Google-side piece that hides your traffic.
 
 ### Step 6: Open the relay port on your VPS firewall
 
-Open **9443/tcp** (same port as **`RELAY_URL`** and **`server_port`**):
+Open **9443/tcp** for this repo’s Docker relay (same port as **`RELAY_URL`** and **`server_port`** in [`server_config.example.json`](server_config.example.json)):
 
 ```bash
 sudo ufw allow 9443/tcp
@@ -196,6 +196,8 @@ Verify:
 curl http://YOUR.VPS.IP:9443/healthz
 ```
 
+If you also host a **legacy** relay on **8443**, open that port separately for that service.
+
 You should get an empty response with HTTP 200. If `curl` times out or refuses, also check your **cloud provider's firewall** (called "Security Groups" on AWS/Hetzner, "Firewall Rules" on DigitalOcean/Vultr, etc.).
 
 ### Step 7: Start the server on your VPS
@@ -204,19 +206,32 @@ On your VPS, run the server binary:
 
 **Linux:**
 ```bash
-./goose-server -config server_config.json
+./hellgate-server -config server_config.json
 ```
 
 **Windows Server:**
 ```cmd
-.\goose-server.exe -config server_config.json
+.\hellgate-server.exe -config server_config.json
 ```
 
 You should see it print the listening address and the healthz/tunnel URLs. Leave this terminal open, or set up the systemd/NSSM service (Step 8) to keep it running after reboots.
 
 **Docker (local image built from this repo):**
 
-> ⚠️ **Important:** The container does **not** auto-generate `server_config.json`. Create and edit `server_config.json` first (with your own `tunnel_key`), then start the container.
+> ⚠️ **Important:** Compose does **not** create `config/server_config.json` for you. Create the file from the example (see below), set **`tunnel_key`**, then start.
+
+**Docker Compose** ([**9443** only](docker/README.md); TCP + in-tunnel UDP):
+
+```bash
+mkdir -p config
+cp server_config.example.json config/server_config.json
+nano config/server_config.json
+docker compose up -d --build
+```
+
+See [`docker/README.md`](docker/README.md). Shortcut: **`make docker`**.
+
+**Run the same image without compose:**
 
 ```bash
 docker compose build
@@ -224,19 +239,9 @@ docker run -d \
   --name hellgate \
   --restart unless-stopped \
   -p 9443:9443 \
-  -v $(pwd)/server_config.json:/app/server_config.json:ro \
+  -v $(pwd)/config/server_config.json:/app/server_config.json:ro \
   hellgate-server:latest
 ```
-
-**Docker Compose** (TCP + UDP, recommended):
-
-```bash
-cp server_config.example.json server_config.json
-nano server_config.json
-docker compose up -d --build
-```
-
-See [`docker/README.md`](docker/README.md). Shortcut: **`make docker`**.
 
 Verify from your own computer:
 
@@ -264,7 +269,7 @@ After=network.target
 [Service]
 Type=simple
 WorkingDirectory=/root
-ExecStart=/root/goose-server -config /root/server_config.json
+ExecStart=/root/hellgate-server -config /root/server_config.json
 Restart=always
 RestartSec=3
 StandardOutput=journal
@@ -285,7 +290,7 @@ sudo systemctl status hellgate --no-pager
 
 ### Step 8 (Windows): Keep the server running after reboot (NSSM)
 
-If your VPS runs **Windows Server**, use [NSSM](https://nssm.cc) (Non-Sucking Service Manager) to register `goose-server` as a Windows service instead of systemd. The `goose-server.exe` binary is a plain Go binary — no installer needed.
+If your VPS runs **Windows Server**, use [NSSM](https://nssm.cc) (Non-Sucking Service Manager) to register `hellgate-server` as a Windows service instead of systemd. The `hellgate-server.exe` binary is a plain Go binary — no installer needed.
 
 **1. Open port 9443 in Windows Firewall** (run as Administrator in Command Prompt) when the server listens on 9443:
 ```cmd
@@ -297,7 +302,7 @@ For a bare binary listening directly on `server_port`, open that port instead. A
 
 **3. Register and start the service** (run as Administrator):
 ```cmd
-C:\nssm\win64\nssm.exe install HellGate "C:\goose-relay\goose-server.exe"
+C:\nssm\win64\nssm.exe install HellGate "C:\goose-relay\hellgate-server.exe"
 C:\nssm\win64\nssm.exe set HellGate AppParameters "-config C:\goose-relay\server_config.json"
 C:\nssm\win64\nssm.exe set HellGate AppDirectory "C:\goose-relay"
 C:\nssm\win64\nssm.exe set HellGate Start SERVICE_AUTO_START
@@ -510,15 +515,16 @@ HellGate/
 │   ├── baselines/                  # Committed baseline JSON files
 │   └── bench.sh                   # Build + run + compare orchestrator
 ├── apps_script/
-│   └── Code.gs                     # RELAY_URL → VPS :9443 (TCP relay; carries TCP + in-tunnel UDP)
+│   └── Code.gs                     # RELAY_URL → VPS :9443 (this repo’s compose default)
 ├── docker/
-│   └── README.md                   # Docker: TCP :9443 relay + cgroup notes
-├── docker-compose.yml              # HellGate: TCP :9443 (HTTP `/tunnel`; see docker/README.md)
+│   └── README.md                   # Single-container :9443
+├── docker-compose.yml              # hellgate on :9443
+├── config/                         # host path for Docker: config/server_config.json (see docker/README.md)
 ├── scripts/
 │   └── hellgate.service             # systemd unit template
 ├── client_config.example.json
 ├── client_config.dev.example.json  # optional reference for cmd/goose-client
-├── server_config.example.json
+├── server_config.example.json      # copy → config/server_config.json for Docker
 └── Dockerfile
 ```
 
@@ -530,7 +536,7 @@ HellGate/
 
 | Problem | Solution |
 |---|---|
-| `cannot execute binary file: Exec format error` when running `goose-server` or `goose-client` | You downloaded the wrong archive for your OS/architecture. The folder name tells you what you got — e.g. `…-darwin-amd64` is a **macOS** binary and won't run on Linux. Re-download the matching archive (Linux VPS → `linux-amd64`; Apple Silicon Mac → `darwin-arm64`; Termux → `android-arm64`). |
+| `cannot execute binary file: Exec format error` when running `hellgate-server` or `goose-client` | You downloaded the wrong archive for your OS/architecture. The folder name tells you what you got — e.g. `…-darwin-amd64` is a **macOS** binary and won't run on Linux. Re-download the matching archive (Linux VPS → `linux-amd64`; Apple Silicon Mac → `darwin-arm64`; Termux → `android-arm64`). |
 | Pre-flight fails: `cannot reach Apps Script` | Your internet connection can't reach Google. Check `google_host` — try a different IP from the 216.239.x.120 range. |
 | Pre-flight fails: `HTTP 204 — key mismatch` | The `tunnel_key` in `client_config.json` doesn't match the one in `server_config.json` on the VPS. They must be byte-identical. |
 | Pre-flight fails: `Apps Script cannot reach your VPS` | The relay port in `RELAY_URL` (**9443/tcp** by default) is not reachable from Google. Open that TCP port (`ufw` + cloud firewall) and `curl http://YOUR.VPS.IP:9443/healthz`. |
@@ -562,7 +568,7 @@ HellGate/
 
 Pull requests are welcome. For any change that touches the carrier loop, session layer, or poll behavior, please include benchmark results so reviewers can evaluate the performance impact.
 
-The `bench/` directory contains an end-to-end harness that spins up real `goose-client` and `goose-server` binaries against a loopback TCP sink and measures throughput, TTFB, session rate, and idle CPU.
+The `bench/` directory contains an end-to-end harness that spins up real `goose-client` and `hellgate-server` binaries against a loopback TCP sink and measures throughput, TTFB, session rate, and idle CPU.
 
 ```bash
 # Build the binaries and run the full benchmark suite

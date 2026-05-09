@@ -16,7 +16,7 @@ client:
 	$(GO) build -trimpath -ldflags "$(LDFLAGS)" -o bin/goose-client ./cmd/client
 
 server:
-	$(GO) build -trimpath -ldflags "$(LDFLAGS)" -o bin/goose-server ./cmd/server
+	$(GO) build -trimpath -ldflags "$(LDFLAGS)" -o bin/hellgate-server ./cmd/server
 
 test:
 	$(GO) test -count=1 ./...
@@ -57,7 +57,7 @@ release-local:
 	  CGO_ENABLED=0 GOOS=$$os GOARCH=$$arch GOARM=$$arm $(GO) build -trimpath -ldflags "$(LDFLAGS)" -o dist/$$client_name/goose-client$$ext ./cmd/client; \
 	  cp client_config.example.json dist/$$client_name/; \
 	  if [ "$$os" != "android" ]; then \
-	    CGO_ENABLED=0 GOOS=$$os GOARCH=$$arch GOARM=$$arm $(GO) build -trimpath -ldflags "$(LDFLAGS)" -o dist/$$server_name/goose-server$$ext ./cmd/server; \
+	    CGO_ENABLED=0 GOOS=$$os GOARCH=$$arch GOARM=$$arm $(GO) build -trimpath -ldflags "$(LDFLAGS)" -o dist/$$server_name/hellgate-server$$ext ./cmd/server; \
 	    cp server_config.example.json dist/$$server_name/; \
 	  fi; \
 	done
