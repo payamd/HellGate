@@ -105,8 +105,8 @@ const (
 	// Split each response batch so small control/UDP chatter cannot consume the
 	// whole drain opportunity under high fan-out: keep most capacity for TCP
 	// payload (video/data) while still reserving a reliable slice for UDP/calls.
-	tcpBatchByteSharePercent  = 85
-	tcpBatchFrameSharePercent = 83
+	tcpBatchByteSharePercent  = 75
+	tcpBatchFrameSharePercent = 75
 
 	// tinyControlFrameBytes marks very small control-like payload frames.
 	// Under heavy parallel sockets these can flood frame slots, so we cap how
@@ -337,6 +337,7 @@ func (s *Server) handleTunnel(w http.ResponseWriter, r *http.Request) {
 	// Active batches use a shorter wait to avoid stalling unrelated sessions,
 	// while empty polls keep long-poll behavior for push responsiveness.
 	deadline := time.Now().Add(s.drainWindow(rxFrames))
+	hasRxDatagram := hasDatagramFrame(rxFrames)
 	for {
 		txFrames, urgent := s.drainAll(clientID, relayCaps, maxResponseBytesPreEncode)
 		if len(txFrames) > 0 {
@@ -352,7 +353,7 @@ func (s *Server) handleTunnel(w http.ResponseWriter, r *http.Request) {
 			// 25ms wait there compounds latency across every TLS round-trip.
 			// Urgent batches (RSTs, first downstream after SYN) skip coalesce
 			// unconditionally so connection setup is not delayed.
-			if !urgent && len(txFrames) > coalesceMinFrames && totalBytes < maxResponseBytesPreEncode {
+			if !urgent && !hasRxDatagram && len(txFrames) > coalesceMinFrames && totalBytes < maxResponseBytesPreEncode {
 				coalesceDeadline := time.Now().Add(s.coalesceDuration(len(txFrames)))
 			coalesceLoop:
 				for {
@@ -411,6 +412,15 @@ func (s *Server) handleTunnel(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func hasDatagramFrame(frames []*frame.Frame) bool {
+	for _, f := range frames {
+		if f.HasFlag(frame.FlagDATAGRAM) {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *Server) drainWindow(rxFrames []*frame.Frame) time.Duration {
 	// Any non-empty client batch was a directed action (SYN, data, FIN, RST):
 	// the worker that posted it is blocked waiting for our response and has
@@ -420,6 +430,11 @@ func (s *Server) drainWindow(rxFrames []*frame.Frame) time.Duration {
 	// Only truly empty polls (idle long-polls) keep the long window so the
 	// server can push downstream data without forcing constant repolling.
 	if len(rxFrames) > 0 {
+		// UDP media/call traffic is latency-sensitive; keep the active hold window
+		// shorter when the client just sent datagrams so we repoll faster.
+		if hasDatagramFrame(rxFrames) {
+			return 200 * time.Millisecond
+		}
 		return ActiveDrainWindow
 	}
 	return LongPollWindow
