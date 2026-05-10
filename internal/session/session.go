@@ -28,8 +28,8 @@ const sessionFinalTimeout = 30 * time.Second
 // rxInboxCap bounds how many in-flight frames can be queued from poll workers
 // to the per-session rxLoop. Sized so a multi-user client absorbing a full
 // busy-mode batch (144 frames) for one session across two simultaneous
-// responses cannot overflow during a brief consumer pause. With 256KB max
-// payload this is at most rxInboxCap × 256KB worth of pointers (the payloads
+// responses cannot overflow during a brief consumer pause. With 128KB max
+// payload this is at most rxInboxCap × 128KB worth of pointers (the payloads
 // themselves are zero-copy slices into the response body, GC'd as drained).
 const rxInboxCap = 1024
 

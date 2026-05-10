@@ -464,15 +464,15 @@ func TestDrainAll_RespectsBatchFrameCap(t *testing.T) {
 
 // TestDrainAll_RespectsByteBudget is the regression test for issue #22
 // (relay response too large; download-mode silent drops). Without a
-// byte-level budget, busy mode could pack 144 × 256KB = 36MB raw → ~48MB
+// byte-level budget, busy mode could pack 144 × 128KB = 18MB raw → ~24MB
 // base64, exceeding the carrier client's 32MB cap. The fix caps total
 // payload bytes per response at maxResponseBytesPreEncode.
 //
 // We populate enough sessions, each with a full max-payload buffer, that
-// the frame count cap (144) would naturally produce ~36MB. The byte
-// budget must hold the response under maxResponseBytesPreEncode + the
+// the frame count alone could exceed sensible wire limits without a byte
+// budget. The drain must hold the response under maxResponseBytesPreEncode + the
 // last drained session's per-session overshoot (worst case: one final
-// max-sized frame past the budget = ~256KB slack).
+// max-sized frame past the budget = ~128KB slack).
 func TestDrainAll_RespectsByteBudget(t *testing.T) {
 	s := mustExitTimingServer(t)
 	// Enough sessions to cross busySessionThreshold AND to provide more

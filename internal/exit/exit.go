@@ -52,18 +52,15 @@ const (
 	// keep this comfortably below that.
 	LongPollWindow = 8 * time.Second
 
-	// MaxFramePayload caps the bytes per downstream frame (matches carrier).
-	// Raised from 128KB: single-seal means no per-frame crypto cost, so fewer
-	// larger frames are strictly better (less length-prefix overhead, fewer
-	// Unmarshal calls). Must match the value in internal/carrier/client.go.
-	MaxFramePayload = 256 * 1024
+	// MaxFramePayload caps the bytes per downstream frame (matches Demonica
+	// Session chunking and internal/carrier/client.go). 256KiB was tried for
+	// throughput but widened head-of-line blocking under fan-out (feeds + calls).
+	MaxFramePayload = 128 * 1024
 
 	// upstreamReadBuf is the chunk size for reading from real net.Conn before
 	// pushing to session.EnqueueTx (which then chunks into frames). Matches
-	// MaxFramePayload so a single TCP read fills exactly one max-sized frame:
-	// halves the frames-per-MB count on bulk downloads vs. 128KB, which cuts
-	// length-prefix and Unmarshal overhead on the receiving carrier.
-	upstreamReadBuf = 256 * 1024
+	// MaxFramePayload so a single TCP read fills at most one max-sized frame.
+	upstreamReadBuf = 128 * 1024
 
 	// coalesceWindow lets us gather a few more frames before responding, which
 	// improves throughput for video streams under higher RTT links.
@@ -79,9 +76,10 @@ const (
 
 	// coalesceMinFrames is the minimum number of frames in a drain before we
 	// bother waiting coalesceWindow. Batches at or below this threshold are
-	// almost certainly interactive (TLS handshake, HTTP control frames) and
-	// adding 25ms per hop compounds visibly across round-trips.
-	coalesceMinFrames = 4
+	// treated as interactive (TLS handshakes, small audio-ish bursts) — keep this
+	// low so multiplexed tunnels don’t staple a fixed 10–25ms wait onto every
+	// marginal batch (helps TCP-carry paths where FlagDATAGRAM is absent).
+	coalesceMinFrames = 2
 
 	// maxDrainFramesPerSession keeps one hot session from dominating an entire
 	// response batch when many interactive sessions are active concurrently.
@@ -106,7 +104,7 @@ const (
 	// maxResponseBytesPreEncode bounds the total payload bytes packed into one
 	// HTTP response, before AES-GCM seal and base64. Apps Script's UrlFetchApp
 	// caps responses at 50MB; the carrier client caps reads at 32MB. Without a
-	// byte-level budget, a busy-mode batch (144 × 256KB = 36MB raw → ~48MB
+	// byte-level budget, a busy-mode batch (144 × 128KB = 18MB raw → ~24MB
 	// base64) can exceed both ceilings — the client logs "relay response too
 	// large; dropping batch" and the entire batch is silently lost (issue #22),
 	// which manifests as stalled downloads. 22MB raw → ~30MB on the wire after
@@ -169,7 +167,7 @@ type Server struct {
 	activity map[[frame.ClientIDLen]byte]chan struct{}
 	stats    serverStats
 
-	// upstreamReadPool is a sync.Pool of upstreamReadBuf (256KiB) buffers
+	// upstreamReadPool is a sync.Pool of upstreamReadBuf (128KiB) buffers
 	// reused across upstream pump goroutines.
 	upstreamReadPool sync.Pool
 }

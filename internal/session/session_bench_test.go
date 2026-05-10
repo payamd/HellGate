@@ -38,7 +38,7 @@ func BenchmarkSessionEnqueueDrain_1MiB(b *testing.B) {
 }
 
 func BenchmarkSessionDrainTxLimited_VariedBudget(b *testing.B) {
-	chunk := bytes.Repeat([]byte("x"), 256*1024)
+	chunk := bytes.Repeat([]byte("x"), 128*1024)
 	cases := []struct {
 		name      string
 		maxFrames int

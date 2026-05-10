@@ -361,8 +361,8 @@ func newFrontedClient(googleIP, sniHost string, pollTimeout time.Duration, sessi
 		// so each worker can keep its own warm conn.
 		MaxIdleConnsPerHost: workersPerEndpoint * 2,
 		// Larger HTTP read/write buffers cut syscall count on bulk batch
-		// bodies (server can return up to ~12 MB per poll under busy
-		// fan-out: 144 frames × 256 KB max payload, base64-expanded).
+		// bodies (server can return large polls under busy fan-out before
+		// the byte budget caps drain; payloads are capped at MaxFramePayload).
 		WriteBufferSize:       64 * 1024,
 		ReadBufferSize:        64 * 1024,
 		IdleConnTimeout:       90 * time.Second,

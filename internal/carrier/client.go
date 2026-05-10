@@ -20,10 +20,8 @@ import (
 
 const (
 	// MaxFramePayload caps the bytes per frame; larger writes are chunked.
-	// Raised from 128KB: single-seal means no per-frame crypto cost, so fewer
-	// larger frames are strictly better (less length-prefix overhead, fewer
-	// Unmarshal calls). Must match the value in internal/exit/exit.go.
-	MaxFramePayload = 256 * 1024
+	// Matches exit.Server defaults; Demonica carrier chunks SOCKS TCP the same way.
+	MaxFramePayload = 128 * 1024
 
 	// pollIdleSleep is the breather between polls when nothing is happening.
 	// 10ms instead of 50ms: keeps workers responsive to kick() misses and
