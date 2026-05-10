@@ -112,7 +112,7 @@ const (
 	// Under heavy parallel sockets these can flood frame slots, so we cap how
 	// many we drain per batch unless the session has clear bulk backlog.
 	tinyControlFrameBytes         = 256
-	maxTinyControlFramesPerBatch = 40
+	maxTinyControlFramesPerBatch = 28
 
 	// dialFailureBackoff is how long we suppress repeated SYN dial attempts to a
 	// target after a structural network/DNS failure.
