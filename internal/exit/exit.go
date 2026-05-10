@@ -758,6 +758,65 @@ func (s *Server) drainAll(owner [frame.ClientIDLen]byte, relayCaps byte, byteBud
 	remaining := batchCap
 	remainingBytes := byteBudget
 
+	// UDP/datagram egress (Voice/RTP + QUIC-shaped flows) before TCP. TCP used to
+	// consume the full per-response frame budget (≤48 normal / 144 busy), so RTP
+	// could lag a carrier poll behind bulk HTTPS chunks and WhatsApp drops to hold.
+
+	// UDP downstream: one logical datagram → one frame (FlagDATAGRAM).
+	udpRefs := make([]udpDrainRef, 0, len(s.udpReady))
+	for id := range s.udpReady {
+		us, ok := s.udpSessions[id]
+		if !ok {
+			delete(s.udpReady, id)
+			continue
+		}
+		if s.sessionOwners[id] != owner {
+			continue
+		}
+		udpRefs = append(udpRefs, udpDrainRef{id: id, tier: tunnelDrainTierForTarget(us.target, relayCaps)})
+	}
+	sort.Slice(udpRefs, func(i, j int) bool {
+		if udpRefs[i].tier != udpRefs[j].tier {
+			return udpRefs[i].tier < udpRefs[j].tier
+		}
+		return bytes.Compare(udpRefs[i].id[:], udpRefs[j].id[:]) < 0
+	})
+	udpRefs = interleaveUDPDrainRefsFair(udpRefs)
+	for _, r := range udpRefs {
+		id := r.id
+		if remaining <= 0 || remainingBytes <= 0 {
+			break
+		}
+		us, ok := s.udpSessions[id]
+		if !ok {
+			delete(s.udpReady, id)
+			continue
+		}
+		perSessionCap := maxDrainFramesPerSession
+		if remaining < perSessionCap {
+			perSessionCap = remaining
+		}
+		if perSessionCap <= 0 {
+			break
+		}
+		frames := us.drainFrames(perSessionCap)
+		if !us.hasPendingDown() {
+			delete(s.udpReady, id)
+		}
+		if len(frames) > 0 {
+			if _, isFirst := s.firstReply[id]; isFirst {
+				urgent = true
+				delete(s.firstReply, id)
+			}
+			s.lastActivity[id] = time.Now()
+			for _, f := range frames {
+				remainingBytes -= len(f.Payload)
+			}
+		}
+		out = append(out, frames...)
+		remaining -= len(frames)
+	}
+
 	// Snapshot TCP sessions then sort inside each tier; interleave realtime vs normal
 	// so pure tier-0 fan-out can't starve resolvers/CDNs needed for IG/others.
 	refs := make([]tcpDrainRef, 0, len(s.txReady))
@@ -832,60 +891,6 @@ func (s *Server) drainAll(owner [frame.ClientIDLen]byte, relayCaps byte, byteBud
 		remaining -= len(frames)
 	}
 
-	// UDP downstream: one logical datagram → one frame (FlagDATAGRAM).
-	udpRefs := make([]udpDrainRef, 0, len(s.udpReady))
-	for id := range s.udpReady {
-		us, ok := s.udpSessions[id]
-		if !ok {
-			delete(s.udpReady, id)
-			continue
-		}
-		if s.sessionOwners[id] != owner {
-			continue
-		}
-		udpRefs = append(udpRefs, udpDrainRef{id: id, tier: tunnelDrainTierForTarget(us.target, relayCaps)})
-	}
-	sort.Slice(udpRefs, func(i, j int) bool {
-		if udpRefs[i].tier != udpRefs[j].tier {
-			return udpRefs[i].tier < udpRefs[j].tier
-		}
-		return bytes.Compare(udpRefs[i].id[:], udpRefs[j].id[:]) < 0
-	})
-	udpRefs = interleaveUDPDrainRefsFair(udpRefs)
-	for _, r := range udpRefs {
-		id := r.id
-		if remaining <= 0 || remainingBytes <= 0 {
-			break
-		}
-		us, ok := s.udpSessions[id]
-		if !ok {
-			delete(s.udpReady, id)
-			continue
-		}
-		perSessionCap := maxDrainFramesPerSession
-		if remaining < perSessionCap {
-			perSessionCap = remaining
-		}
-		if perSessionCap <= 0 {
-			break
-		}
-		frames := us.drainFrames(perSessionCap)
-		if !us.hasPendingDown() {
-			delete(s.udpReady, id)
-		}
-		if len(frames) > 0 {
-			if _, isFirst := s.firstReply[id]; isFirst {
-				urgent = true
-				delete(s.firstReply, id)
-			}
-			s.lastActivity[id] = time.Now()
-			for _, f := range frames {
-				remainingBytes -= len(f.Payload)
-			}
-		}
-		out = append(out, frames...)
-		remaining -= len(frames)
-	}
 	if !urgent && framesContainDatagram(out) {
 		urgent = true
 	}
