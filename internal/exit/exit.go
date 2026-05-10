@@ -23,6 +23,19 @@ import (
 	"golang.org/x/net/proxy"
 )
 
+// framesContainDatagram reports whether this batch carries UDP-tunnel downlink.
+// Such frames must not sit behind the HTTP response coalesce wait: VoIP RTP
+// batches are often >coalesceMinFrames small packets; adding 10–25ms jitter
+// per hop makes voice unintelligible.
+func framesContainDatagram(frames []*frame.Frame) bool {
+	for _, f := range frames {
+		if f.HasFlag(frame.FlagDATAGRAM) {
+			return true
+		}
+	}
+	return false
+}
+
 const (
 	// ActiveDrainWindow caps how long a batch that just performed real work
 	// (SYN/connect or non-empty uplink data) waits for downstream bytes.
@@ -339,8 +352,9 @@ func (s *Server) handleTunnel(w http.ResponseWriter, r *http.Request) {
 			// Small batches (≤ coalesceMinFrames) are interactive; adding a
 			// 25ms wait there compounds latency across every TLS round-trip.
 			// Urgent batches (RSTs, first downstream after SYN) skip coalesce
-			// unconditionally so connection setup is not delayed.
-			if !urgent && len(txFrames) > coalesceMinFrames && totalBytes < maxResponseBytesPreEncode {
+			// unconditionally so connection setup is not delayed. Same for any
+			// UDP downlink: coalesce would add fixed ms jitter to every voice batch.
+			if !urgent && !framesContainDatagram(txFrames) && len(txFrames) > coalesceMinFrames && totalBytes < maxResponseBytesPreEncode {
 				coalesceDeadline := time.Now().Add(s.coalesceDuration(len(txFrames)))
 				coalesceLoop:
 					for {
@@ -351,12 +365,15 @@ func (s *Server) handleTunnel(w http.ResponseWriter, r *http.Request) {
 						select {
 						case <-r.Context().Done():
 							return
-						case <-wakeCh:
-							more, _ := s.drainAll(clientID, relayCaps, maxResponseBytesPreEncode-totalBytes)
-							for _, f := range more {
-								totalBytes += len(f.Payload)
-							}
-							txFrames = append(txFrames, more...)
+					case <-wakeCh:
+						more, _ := s.drainAll(clientID, relayCaps, maxResponseBytesPreEncode-totalBytes)
+						for _, f := range more {
+							totalBytes += len(f.Payload)
+						}
+						txFrames = append(txFrames, more...)
+						if framesContainDatagram(txFrames) {
+							break coalesceLoop
+						}
 						case <-time.After(remainingCoalesce):
 							break coalesceLoop
 						}
@@ -870,6 +887,9 @@ func (s *Server) drainAll(owner [frame.ClientIDLen]byte, relayCaps byte, byteBud
 		}
 		out = append(out, frames...)
 		remaining -= len(frames)
+	}
+	if !urgent && framesContainDatagram(out) {
+		urgent = true
 	}
 	return out, urgent
 }
