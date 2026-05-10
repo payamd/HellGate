@@ -102,6 +102,18 @@ const (
 	// last drained session.
 	maxResponseBytesPreEncode = 22 * 1024 * 1024
 
+	// Split each response batch so small control/UDP chatter cannot consume the
+	// whole drain opportunity under high fan-out: keep most capacity for TCP
+	// payload (video/data) while still reserving a reliable slice for UDP/calls.
+	tcpBatchByteSharePercent  = 85
+	tcpBatchFrameSharePercent = 83
+
+	// tinyControlFrameBytes marks very small control-like payload frames.
+	// Under heavy parallel sockets these can flood frame slots, so we cap how
+	// many we drain per batch unless the session has clear bulk backlog.
+	tinyControlFrameBytes         = 256
+	maxTinyControlFramesPerBatch = 40
+
 	// dialFailureBackoff is how long we suppress repeated SYN dial attempts to a
 	// target after a structural network/DNS failure.
 	dialFailureBackoff = 2 * time.Second
@@ -741,6 +753,25 @@ func (s *Server) drainAll(owner [frame.ClientIDLen]byte, relayCaps byte, byteBud
 	}
 	remaining := batchCap
 	remainingBytes := byteBudget
+	tcpByteBudget := (byteBudget * tcpBatchByteSharePercent) / 100
+	if tcpByteBudget <= 0 {
+		tcpByteBudget = byteBudget
+	}
+	udpByteBudget := byteBudget - tcpByteBudget
+	if udpByteBudget < 0 {
+		udpByteBudget = 0
+	}
+	tcpFrameBudget := (batchCap * tcpBatchFrameSharePercent) / 100
+	if tcpFrameBudget <= 0 {
+		tcpFrameBudget = batchCap
+	}
+	udpFrameBudget := batchCap - tcpFrameBudget
+	if udpFrameBudget < 0 {
+		udpFrameBudget = 0
+	}
+	var tcpBytesUsed, udpBytesUsed int
+	var tcpFramesUsed, udpFramesUsed int
+	var tinyControlFrames int
 
 	// Snapshot TCP sessions then sort inside each tier; interleave realtime vs normal
 	// so pure tier-0 fan-out can't starve resolvers/CDNs needed for IG/others.
@@ -772,17 +803,31 @@ func (s *Server) drainAll(owner [frame.ClientIDLen]byte, relayCaps byte, byteBud
 		if remaining <= 0 || remainingBytes <= 0 {
 			break
 		}
+		if tcpFramesUsed >= tcpFrameBudget || tcpBytesUsed >= tcpByteBudget {
+			break
+		}
 		sess, ok := s.sessions[id]
 		if !ok {
 			delete(s.txReady, id)
+			continue
+		}
+		if tinyControlFrames >= maxTinyControlFramesPerBatch &&
+			sess.TxQueuedBytes() < bulkDownstreamQueueThreshold {
+			// Keep bulk queues moving when tiny control chatter dominates.
 			continue
 		}
 		perSessionCap := maxDrainFramesPerSession
 		if sess.TxQueuedBytes() >= bulkDownstreamQueueThreshold {
 			perSessionCap = maxDrainFramesPerHeavySession
 		}
+		if remainingTCPFrames := tcpFrameBudget - tcpFramesUsed; perSessionCap > remainingTCPFrames {
+			perSessionCap = remainingTCPFrames
+		}
 		if remaining < perSessionCap {
 			perSessionCap = remaining
+		}
+		if perSessionCap <= 0 {
+			break
 		}
 		frames := sess.DrainTxLimited(MaxFramePayload, perSessionCap)
 		// Only clear from txReady when fully drained. A partial drain (cap
@@ -806,6 +851,11 @@ func (s *Server) drainAll(owner [frame.ClientIDLen]byte, relayCaps byte, byteBud
 			// idleSessionTimeout even though it is actively delivering data.
 			s.lastActivity[id] = time.Now()
 			for _, f := range frames {
+				if len(f.Payload) <= tinyControlFrameBytes {
+					tinyControlFrames++
+				}
+				tcpFramesUsed++
+				tcpBytesUsed += len(f.Payload)
 				remainingBytes -= len(f.Payload)
 			}
 		}
@@ -838,14 +888,26 @@ func (s *Server) drainAll(owner [frame.ClientIDLen]byte, relayCaps byte, byteBud
 		if remaining <= 0 || remainingBytes <= 0 {
 			break
 		}
+		if udpFrameBudget > 0 && udpFramesUsed >= udpFrameBudget {
+			break
+		}
+		if udpByteBudget > 0 && udpBytesUsed >= udpByteBudget {
+			break
+		}
 		us, ok := s.udpSessions[id]
 		if !ok {
 			delete(s.udpReady, id)
 			continue
 		}
 		perSessionCap := maxDrainFramesPerSession
+		if remainingUDPFrames := udpFrameBudget - udpFramesUsed; perSessionCap > remainingUDPFrames {
+			perSessionCap = remainingUDPFrames
+		}
 		if remaining < perSessionCap {
 			perSessionCap = remaining
+		}
+		if perSessionCap <= 0 {
+			break
 		}
 		frames := us.drainFrames(perSessionCap)
 		if !us.hasPendingDown() {
@@ -858,6 +920,8 @@ func (s *Server) drainAll(owner [frame.ClientIDLen]byte, relayCaps byte, byteBud
 			}
 			s.lastActivity[id] = time.Now()
 			for _, f := range frames {
+				udpFramesUsed++
+				udpBytesUsed += len(f.Payload)
 				remainingBytes -= len(f.Payload)
 			}
 		}
