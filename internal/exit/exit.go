@@ -74,6 +74,13 @@ const (
 	// response batch when many interactive sessions are active concurrently.
 	maxDrainFramesPerSession = 8
 
+	// When a TCP session already has substantial downstream buffered (CDN segment
+	// pump), raising the slice per drain helps Instagram/TikTok-style reels keep
+	// up under many parallel Meta sockets; the default cap alone stalls near ~10%
+	// as the relay round-robins 8 × MaxFramePayload per visit.
+	bulkDownstreamQueueThreshold = 512 * 1024
+	maxDrainFramesPerHeavySession = 24
+
 	// maxDrainFramesPerBatch bounds total frames emitted in one HTTP response so
 	// one poll does not become a very large base64 body under high concurrency.
 	maxDrainFramesPerBatch = 48
@@ -771,6 +778,9 @@ func (s *Server) drainAll(owner [frame.ClientIDLen]byte, relayCaps byte, byteBud
 			continue
 		}
 		perSessionCap := maxDrainFramesPerSession
+		if sess.TxQueuedBytes() >= bulkDownstreamQueueThreshold {
+			perSessionCap = maxDrainFramesPerHeavySession
+		}
 		if remaining < perSessionCap {
 			perSessionCap = remaining
 		}

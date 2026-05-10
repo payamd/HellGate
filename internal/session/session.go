@@ -220,6 +220,13 @@ func (s *Session) FirstQueuedAt() time.Time {
 	return s.firstQueuedAt
 }
 
+// TxQueuedBytes returns bytes queued upstream→client (not yet drained as frames).
+func (s *Session) TxQueuedBytes() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.txBuf)
+}
+
 // IsDone reports whether both FIN frames (sent and received) have flowed,
 // OR whether we sent our FIN but the peer's FIN never arrived within
 // sessionFinalTimeout. The timeout prevents orphaned sessions from accumulating
