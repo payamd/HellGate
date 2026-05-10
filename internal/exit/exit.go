@@ -342,25 +342,25 @@ func (s *Server) handleTunnel(w http.ResponseWriter, r *http.Request) {
 			// unconditionally so connection setup is not delayed.
 			if !urgent && len(txFrames) > coalesceMinFrames && totalBytes < maxResponseBytesPreEncode {
 				coalesceDeadline := time.Now().Add(s.coalesceDuration(len(txFrames)))
-			coalesceLoop:
-				for {
-					if time.Now().After(coalesceDeadline) || totalBytes >= maxResponseBytesPreEncode {
-						break coalesceLoop
-					}
-					remainingCoalesce := time.Until(coalesceDeadline)
-					select {
-					case <-r.Context().Done():
-						return
-					case <-wakeCh:
-						more, _ := s.drainAll(clientID, relayCaps, maxResponseBytesPreEncode-totalBytes)
-						for _, f := range more {
-							totalBytes += len(f.Payload)
+				coalesceLoop:
+					for {
+						if time.Now().After(coalesceDeadline) || totalBytes >= maxResponseBytesPreEncode {
+							break coalesceLoop
 						}
-						txFrames = append(txFrames, more...)
-					case <-time.After(remainingCoalesce):
-						break coalesceLoop
+						remainingCoalesce := time.Until(coalesceDeadline)
+						select {
+						case <-r.Context().Done():
+							return
+						case <-wakeCh:
+							more, _ := s.drainAll(clientID, relayCaps, maxResponseBytesPreEncode-totalBytes)
+							for _, f := range more {
+								totalBytes += len(f.Payload)
+							}
+							txFrames = append(txFrames, more...)
+						case <-time.After(remainingCoalesce):
+							break coalesceLoop
+						}
 					}
-				}
 			}
 
 			respBody, err := frame.EncodeBatch(s.aead, clientID, txFrames, 0)
