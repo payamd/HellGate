@@ -102,18 +102,6 @@ const (
 	// last drained session.
 	maxResponseBytesPreEncode = 22 * 1024 * 1024
 
-	// Split each response batch so small control/UDP chatter cannot consume the
-	// whole drain opportunity under high fan-out: keep most capacity for TCP
-	// payload (video/data) while still reserving a reliable slice for UDP/calls.
-	tcpBatchByteSharePercent  = 75
-	tcpBatchFrameSharePercent = 75
-
-	// tinyControlFrameBytes marks very small control-like payload frames.
-	// Under heavy parallel sockets these can flood frame slots, so we cap how
-	// many we drain per batch unless the session has clear bulk backlog.
-	tinyControlFrameBytes         = 256
-	maxTinyControlFramesPerBatch = 40
-
 	// dialFailureBackoff is how long we suppress repeated SYN dial attempts to a
 	// target after a structural network/DNS failure.
 	dialFailureBackoff = 2 * time.Second
@@ -337,7 +325,6 @@ func (s *Server) handleTunnel(w http.ResponseWriter, r *http.Request) {
 	// Active batches use a shorter wait to avoid stalling unrelated sessions,
 	// while empty polls keep long-poll behavior for push responsiveness.
 	deadline := time.Now().Add(s.drainWindow(rxFrames))
-	hasRxDatagram := hasDatagramFrame(rxFrames)
 	for {
 		txFrames, urgent := s.drainAll(clientID, relayCaps, maxResponseBytesPreEncode)
 		if len(txFrames) > 0 {
@@ -353,7 +340,7 @@ func (s *Server) handleTunnel(w http.ResponseWriter, r *http.Request) {
 			// 25ms wait there compounds latency across every TLS round-trip.
 			// Urgent batches (RSTs, first downstream after SYN) skip coalesce
 			// unconditionally so connection setup is not delayed.
-			if !urgent && !hasRxDatagram && len(txFrames) > coalesceMinFrames && totalBytes < maxResponseBytesPreEncode {
+			if !urgent && len(txFrames) > coalesceMinFrames && totalBytes < maxResponseBytesPreEncode {
 				coalesceDeadline := time.Now().Add(s.coalesceDuration(len(txFrames)))
 			coalesceLoop:
 				for {
@@ -412,14 +399,6 @@ func (s *Server) handleTunnel(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func hasDatagramFrame(frames []*frame.Frame) bool {
-	for _, f := range frames {
-		if f.HasFlag(frame.FlagDATAGRAM) {
-			return true
-		}
-	}
-	return false
-}
 
 func (s *Server) drainWindow(rxFrames []*frame.Frame) time.Duration {
 	// Any non-empty client batch was a directed action (SYN, data, FIN, RST):
@@ -430,11 +409,6 @@ func (s *Server) drainWindow(rxFrames []*frame.Frame) time.Duration {
 	// Only truly empty polls (idle long-polls) keep the long window so the
 	// server can push downstream data without forcing constant repolling.
 	if len(rxFrames) > 0 {
-		// UDP media/call traffic is latency-sensitive; keep the active hold window
-		// shorter when the client just sent datagrams so we repoll faster.
-		if hasDatagramFrame(rxFrames) {
-			return 200 * time.Millisecond
-		}
 		return ActiveDrainWindow
 	}
 	return LongPollWindow
@@ -768,25 +742,6 @@ func (s *Server) drainAll(owner [frame.ClientIDLen]byte, relayCaps byte, byteBud
 	}
 	remaining := batchCap
 	remainingBytes := byteBudget
-	tcpByteBudget := (byteBudget * tcpBatchByteSharePercent) / 100
-	if tcpByteBudget <= 0 {
-		tcpByteBudget = byteBudget
-	}
-	udpByteBudget := byteBudget - tcpByteBudget
-	if udpByteBudget < 0 {
-		udpByteBudget = 0
-	}
-	tcpFrameBudget := (batchCap * tcpBatchFrameSharePercent) / 100
-	if tcpFrameBudget <= 0 {
-		tcpFrameBudget = batchCap
-	}
-	udpFrameBudget := batchCap - tcpFrameBudget
-	if udpFrameBudget < 0 {
-		udpFrameBudget = 0
-	}
-	var tcpBytesUsed, udpBytesUsed int
-	var tcpFramesUsed, udpFramesUsed int
-	var tinyControlFrames int
 
 	// Snapshot TCP sessions then sort inside each tier; interleave realtime vs normal
 	// so pure tier-0 fan-out can't starve resolvers/CDNs needed for IG/others.
@@ -818,25 +773,14 @@ func (s *Server) drainAll(owner [frame.ClientIDLen]byte, relayCaps byte, byteBud
 		if remaining <= 0 || remainingBytes <= 0 {
 			break
 		}
-		if tcpFramesUsed >= tcpFrameBudget || tcpBytesUsed >= tcpByteBudget {
-			break
-		}
 		sess, ok := s.sessions[id]
 		if !ok {
 			delete(s.txReady, id)
 			continue
 		}
-		if tinyControlFrames >= maxTinyControlFramesPerBatch &&
-			sess.TxQueuedBytes() < bulkDownstreamQueueThreshold {
-			// Keep bulk queues moving when tiny control chatter dominates.
-			continue
-		}
 		perSessionCap := maxDrainFramesPerSession
 		if sess.TxQueuedBytes() >= bulkDownstreamQueueThreshold {
 			perSessionCap = maxDrainFramesPerHeavySession
-		}
-		if remainingTCPFrames := tcpFrameBudget - tcpFramesUsed; perSessionCap > remainingTCPFrames {
-			perSessionCap = remainingTCPFrames
 		}
 		if remaining < perSessionCap {
 			perSessionCap = remaining
@@ -866,11 +810,6 @@ func (s *Server) drainAll(owner [frame.ClientIDLen]byte, relayCaps byte, byteBud
 			// idleSessionTimeout even though it is actively delivering data.
 			s.lastActivity[id] = time.Now()
 			for _, f := range frames {
-				if len(f.Payload) <= tinyControlFrameBytes {
-					tinyControlFrames++
-				}
-				tcpFramesUsed++
-				tcpBytesUsed += len(f.Payload)
 				remainingBytes -= len(f.Payload)
 			}
 		}
@@ -903,21 +842,12 @@ func (s *Server) drainAll(owner [frame.ClientIDLen]byte, relayCaps byte, byteBud
 		if remaining <= 0 || remainingBytes <= 0 {
 			break
 		}
-		if udpFrameBudget > 0 && udpFramesUsed >= udpFrameBudget {
-			break
-		}
-		if udpByteBudget > 0 && udpBytesUsed >= udpByteBudget {
-			break
-		}
 		us, ok := s.udpSessions[id]
 		if !ok {
 			delete(s.udpReady, id)
 			continue
 		}
 		perSessionCap := maxDrainFramesPerSession
-		if remainingUDPFrames := udpFrameBudget - udpFramesUsed; perSessionCap > remainingUDPFrames {
-			perSessionCap = remainingUDPFrames
-		}
 		if remaining < perSessionCap {
 			perSessionCap = remaining
 		}
@@ -935,8 +865,6 @@ func (s *Server) drainAll(owner [frame.ClientIDLen]byte, relayCaps byte, byteBud
 			}
 			s.lastActivity[id] = time.Now()
 			for _, f := range frames {
-				udpFramesUsed++
-				udpBytesUsed += len(f.Payload)
 				remainingBytes -= len(f.Payload)
 			}
 		}
