@@ -79,16 +79,19 @@ func TestEncodeDecodeBatch_RoundTrip(t *testing.T) {
 		{SessionID: sid(2), Seq: 0, Flags: FlagACK},
 	}
 	wantClient := [ClientIDLen]byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}
-	body, err := EncodeBatch(c, wantClient, in)
+	body, err := EncodeBatch(c, wantClient, in, 0)
 	if err != nil {
 		t.Fatalf("encode: %v", err)
 	}
-	gotClient, out, err := DecodeBatch(c, body)
+	gotClient, gotCaps, out, err := DecodeBatch(c, body)
 	if err != nil {
 		t.Fatalf("decode: %v", err)
 	}
 	if gotClient != wantClient {
 		t.Fatalf("clientID: got %x want %x", gotClient, wantClient)
+	}
+	if gotCaps != 0 {
+		t.Fatalf("relayCaps: got %x want 0", gotCaps)
 	}
 	if len(out) != len(in) {
 		t.Fatalf("count: got %d want %d", len(out), len(in))
@@ -103,9 +106,27 @@ func TestEncodeDecodeBatch_RoundTrip(t *testing.T) {
 	}
 }
 
+func TestEncodeDecodeBatch_RelayCapsFooter(t *testing.T) {
+	c := newTestCrypto(t)
+	clientID := [ClientIDLen]byte{9, 8, 7, 6, 5, 4, 3, 2, 1, 0, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff}
+	wantCaps := RelayCapWhatsApp | RelayCapInstagram
+	in := []*Frame{{SessionID: sid(4), Seq: 1, Payload: []byte("z")}}
+	body, err := EncodeBatch(c, clientID, in, wantCaps)
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	gotID, caps, out, err := DecodeBatch(c, body)
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if gotID != clientID || caps != wantCaps || len(out) != 1 {
+		t.Fatalf("got id=%x caps=%x frames=%d", gotID, caps, len(out))
+	}
+}
+
 func TestDecodeBatch_EmptyBody(t *testing.T) {
 	c := newTestCrypto(t)
-	_, out, err := DecodeBatch(c, nil)
+	_, _, out, err := DecodeBatch(c, nil)
 	if err != nil {
 		t.Fatalf("decode empty: %v", err)
 	}
@@ -125,7 +146,7 @@ func benchSealOpenBatch(b *testing.B, frames int, payloadSize int) {
 		in[i] = &Frame{SessionID: sid(byte(i)), Seq: uint64(i), Payload: pl}
 	}
 	var benchClient [ClientIDLen]byte
-	body, err := EncodeBatch(c, benchClient, in)
+	body, err := EncodeBatch(c, benchClient, in, 0)
 	if err != nil {
 		b.Fatalf("encode: %v", err)
 	}
@@ -133,11 +154,11 @@ func benchSealOpenBatch(b *testing.B, frames int, payloadSize int) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		body, err := EncodeBatch(c, benchClient, in)
+		body, err := EncodeBatch(c, benchClient, in, 0)
 		if err != nil {
 			b.Fatalf("encode: %v", err)
 		}
-		if _, _, err := DecodeBatch(c, body); err != nil {
+		if _, _, _, err := DecodeBatch(c, body); err != nil {
 			b.Fatalf("decode: %v", err)
 		}
 	}
@@ -155,12 +176,12 @@ func TestDecodeBatch_TamperedBatchFails(t *testing.T) {
 		{SessionID: sid(1), Seq: 1, Payload: []byte("good2")},
 	}
 	var zeroClient [ClientIDLen]byte
-	body, _ := EncodeBatch(c, zeroClient, in)
+	body, _ := EncodeBatch(c, zeroClient, in, 0)
 	raw, _ := b64Encoding.DecodeString(string(body))
 	raw[len(raw)/2] ^= 0x01 // flip a bit in the middle of the ciphertext
 	out := make([]byte, b64Encoding.EncodedLen(len(raw)))
 	b64Encoding.Encode(out, raw)
-	if _, _, err := DecodeBatch(c, out); err == nil {
+	if _, _, _, err := DecodeBatch(c, out); err == nil {
 		t.Fatal("expected auth error on tampered batch, got nil")
 	}
 }
@@ -184,12 +205,15 @@ func TestDecodeBatch_LegacyPadding(t *testing.T) {
 	legacyBody := []byte(base64.StdEncoding.EncodeToString(sealed))
 
 	// Should still decode correctly despite padded base64.
-	gotClient, out, err := DecodeBatch(c, legacyBody)
+	gotClient, gotCaps, out, err := DecodeBatch(c, legacyBody)
 	if err != nil {
 		t.Fatalf("decode legacy: %v", err)
 	}
 	if gotClient != zeroClient {
 		t.Fatal("clientID mismatch")
+	}
+	if gotCaps != 0 {
+		t.Fatal("relayCaps mismatch")
 	}
 	if len(out) != 1 || !bytes.Equal(out[0].Payload, in[0].Payload) {
 		t.Fatal("payload mismatch")
@@ -211,16 +235,19 @@ func TestEncodeDecodeBatch_Compressed(t *testing.T) {
 	for i := range clientID {
 		clientID[i] = byte(i + 1)
 	}
-	body, err := EncodeBatch(c, clientID, in)
+	body, err := EncodeBatch(c, clientID, in, 0)
 	if err != nil {
 		t.Fatalf("encode: %v", err)
 	}
-	gotClient, out, err := DecodeBatch(c, body)
+	gotClient, gotCaps, out, err := DecodeBatch(c, body)
 	if err != nil {
 		t.Fatalf("decode: %v", err)
 	}
 	if gotClient != clientID {
 		t.Fatalf("clientID mismatch: got %x want %x", gotClient, clientID)
+	}
+	if gotCaps != 0 {
+		t.Fatalf("relayCaps mismatch")
 	}
 	if len(out) != len(in) {
 		t.Fatalf("frame count: got %d want %d", len(out), len(in))
@@ -265,7 +292,7 @@ func TestZstdFlagEmitted(t *testing.T) {
 		clientID[i] = byte(i + 1)
 	}
 
-	body, err := EncodeBatch(c, clientID, frames)
+	body, err := EncodeBatch(c, clientID, frames, 0)
 	if err != nil {
 		t.Fatalf("encode: %v", err)
 	}
@@ -290,12 +317,15 @@ func TestZstdFlagEmitted(t *testing.T) {
 	t.Logf("flags byte = 0x%02x (zstd) ✓", rawPlain[0])
 
 	// Round-trip must reproduce identical frames.
-	gotClient, out, err := DecodeBatch(c, body)
+	gotClient, gotCaps, out, err := DecodeBatch(c, body)
 	if err != nil {
 		t.Fatalf("decode: %v", err)
 	}
 	if gotClient != clientID {
 		t.Fatalf("clientID mismatch: got %x want %x", gotClient, clientID)
+	}
+	if gotCaps != 0 {
+		t.Fatal("relayCaps mismatch")
 	}
 	if len(out) != len(frames) {
 		t.Fatalf("frame count: got %d want %d", len(out), len(frames))
@@ -359,7 +389,7 @@ func TestZstdLegacyFlateStillDecodes(t *testing.T) {
 	encoded := make([]byte, b64Encoding.EncodedLen(len(sealed)))
 	b64Encoding.Encode(encoded, sealed)
 
-	_, out, err := DecodeBatch(c, encoded)
+	_, _, out, err := DecodeBatch(c, encoded)
 	if err != nil {
 		t.Fatalf("legacy flate decode: %v", err)
 	}

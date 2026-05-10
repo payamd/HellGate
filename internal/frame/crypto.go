@@ -86,6 +86,17 @@ func (c *Crypto) Open(envelope []byte) ([]byte, error) {
 // are never delivered to a different client polling the same server.
 const ClientIDLen = 16
 
+// Relay batch footer (plaintext bytes after serialized frames): optional hints
+// for exit-side multiplex scheduling. Omit the footer entirely when RelayCaps == 0
+// so older peers unchanged on the wire. Demonica sets this only when enabled.
+const (
+	RelayCapsExtTag byte = 0xc1 // extension tag preceding caps byte on the batch tail
+
+	RelayCapWhatsApp   byte = 1 << 0
+	RelayCapInstagram  byte = 1 << 1
+	RelayCapsMessaging byte = RelayCapWhatsApp | RelayCapInstagram // typical mobile toggle ON
+)
+
 // batchPool reuses the marshaled-slice scratch and the plaintext header
 // buffer across EncodeBatch calls. Without pooling, each batch allocates two
 // fresh buffers (the plain header + the marshaled-frame slice header), which
@@ -134,11 +145,11 @@ const (
 // Wire format (before base64):
 //
 //	nonce (12 bytes) || AES-GCM ciphertext+tag over:
-//	    flags (1 byte)  — 0x00 raw | 0x01 DEFLATE-compressed body
+//	    flags (1 byte)  — 0x00 raw | 0x01 DEFLATE-compressed body | 0x02 zstd body
 //	    client_id (16 bytes)
 //	    u16 frame_count
 //	    for each frame: u32 marshaled_len || marshaled_frame_bytes
-//	    (above three fields are DEFLATE-compressed when flags == 0x01)
+//	    optional: RelayCapsExtTag (0xC1) || RelayCap* bitmask (relay scheduling hint)
 //
 // The entire batch is sealed once, replacing the old per-frame envelope scheme.
 // This reduces crypto overhead from O(N) nonces+tags to one, cutting both CPU
@@ -149,7 +160,7 @@ const (
 // because the Apps Script forwarder only relays the request body — headers do
 // not survive the hop. Sealing it under AES-GCM also means a passive observer
 // of the relay traffic cannot tell two clients apart by their IDs.
-func EncodeBatch(c *Crypto, clientID [ClientIDLen]byte, frames []*Frame) ([]byte, error) {
+func EncodeBatch(c *Crypto, clientID [ClientIDLen]byte, frames []*Frame, relayCaps byte) ([]byte, error) {
 	if len(frames) > 0xFFFF {
 		return nil, fmt.Errorf("batch: too many frames: %d", len(frames))
 	}
@@ -167,6 +178,9 @@ func EncodeBatch(c *Crypto, clientID [ClientIDLen]byte, frames []*Frame) ([]byte
 	}()
 
 	plainSize := 1 + ClientIDLen + 2 // flags byte + client_id + u16 frame count
+	if relayCaps != 0 {
+		plainSize += 2 // RelayCapsExtTag || caps
+	}
 	for _, f := range frames {
 		raw, err := f.Marshal()
 		if err != nil {
@@ -197,6 +211,9 @@ func EncodeBatch(c *Crypto, clientID [ClientIDLen]byte, frames []*Frame) ([]byte
 		plain = append(plain,
 			byte(len(raw)>>24), byte(len(raw)>>16), byte(len(raw)>>8), byte(len(raw)))
 		plain = append(plain, raw...)
+	}
+	if relayCaps != 0 {
+		plain = append(plain, RelayCapsExtTag, relayCaps)
 	}
 
 	// Attempt Zstandard compression on the payload section (everything after
@@ -241,10 +258,10 @@ func EncodeBatch(c *Crypto, clientID [ClientIDLen]byte, frames []*Frame) ([]byte
 // must treat them as read-only. For compressed batches (batchFlagFlate) the
 // payloads point into the decompressed buffer, which is also heap-allocated and
 // must not be modified by callers.
-func DecodeBatch(c *Crypto, body []byte) ([ClientIDLen]byte, []*Frame, error) {
+func DecodeBatch(c *Crypto, body []byte) ([ClientIDLen]byte, byte, []*Frame, error) {
 	var zeroID [ClientIDLen]byte
 	if len(body) == 0 {
-		return zeroID, nil, nil
+		return zeroID, 0, nil, nil
 	}
 	// bytes.TrimSpace returns a subslice (no alloc); Decode writes into a
 	// pre-allocated buffer — together this is one allocation instead of three.
@@ -256,20 +273,20 @@ func DecodeBatch(c *Crypto, body []byte) ([ClientIDLen]byte, []*Frame, error) {
 	sealed := make([]byte, b64Encoding.DecodedLen(len(trimmed)))
 	n, err := b64Encoding.Decode(sealed, trimmed)
 	if err != nil {
-		return zeroID, nil, fmt.Errorf("batch: base64 decode: %w", err)
+		return zeroID, 0, nil, fmt.Errorf("batch: base64 decode: %w", err)
 	}
 	sealed = sealed[:n]
 
 	rawPlain, err := c.Open(sealed)
 	if err != nil {
-		return zeroID, nil, fmt.Errorf("batch: open: %w", err)
+		return zeroID, 0, nil, fmt.Errorf("batch: open: %w", err)
 	}
 
 	// Decode the leading flags byte. Both peers must run the same version;
 	// an unrecognised flag byte is rejected so a protocol mismatch surfaces
 	// immediately rather than producing silent corruption.
 	if len(rawPlain) == 0 {
-		return zeroID, nil, errors.New("batch: empty plaintext")
+		return zeroID, 0, nil, errors.New("batch: empty plaintext")
 	}
 	var plain []byte
 	switch rawPlain[0] {
@@ -280,7 +297,7 @@ func DecodeBatch(c *Crypto, body []byte) ([ClientIDLen]byte, []*Frame, error) {
 		r := flate.NewReader(bytes.NewReader(rawPlain[1:]))
 		var buf bytes.Buffer
 		if _, err := io.Copy(&buf, r); err != nil {
-			return zeroID, nil, fmt.Errorf("batch: flate decompress: %w", err)
+			return zeroID, 0, nil, fmt.Errorf("batch: flate decompress: %w", err)
 		}
 		r.Close()
 		plain = buf.Bytes()
@@ -289,15 +306,15 @@ func DecodeBatch(c *Crypto, body []byte) ([ClientIDLen]byte, []*Frame, error) {
 		decompressed, err := dec.DecodeAll(rawPlain[1:], nil)
 		zstdDecPool.Put(dec)
 		if err != nil {
-			return zeroID, nil, fmt.Errorf("batch: zstd decompress: %w", err)
+			return zeroID, 0, nil, fmt.Errorf("batch: zstd decompress: %w", err)
 		}
 		plain = decompressed
 	default:
-		return zeroID, nil, fmt.Errorf("batch: unknown flags byte 0x%02x", rawPlain[0])
+		return zeroID, 0, nil, fmt.Errorf("batch: unknown flags byte 0x%02x", rawPlain[0])
 	}
 
 	if len(plain) < ClientIDLen+2 {
-		return zeroID, nil, errors.New("batch: short header")
+		return zeroID, 0, nil, errors.New("batch: short header")
 	}
 	var clientID [ClientIDLen]byte
 	copy(clientID[:], plain[:ClientIDLen])
@@ -307,19 +324,31 @@ func DecodeBatch(c *Crypto, body []byte) ([ClientIDLen]byte, []*Frame, error) {
 	frames := make([]*Frame, 0, count)
 	for i := 0; i < count; i++ {
 		if len(plain) < off+4 {
-			return zeroID, nil, errors.New("batch: short frame length")
+			return zeroID, 0, nil, errors.New("batch: short frame length")
 		}
 		flen := int(binary.BigEndian.Uint32(plain[off:]))
 		off += 4
 		if len(plain) < off+flen {
-			return zeroID, nil, errors.New("batch: short frame body")
+			return zeroID, 0, nil, errors.New("batch: short frame body")
 		}
 		f, _, err := Unmarshal(plain[off : off+flen])
 		if err != nil {
-			return zeroID, nil, fmt.Errorf("batch: unmarshal frame %d: %w", i, err)
+			return zeroID, 0, nil, fmt.Errorf("batch: unmarshal frame %d: %w", i, err)
 		}
 		frames = append(frames, f)
 		off += flen
 	}
-	return clientID, frames, nil
+	var relayCaps byte
+	switch rem := len(plain) - off; rem {
+	case 0:
+		// legacy batch (no footer)
+	case 2:
+		if plain[off] != RelayCapsExtTag {
+			return zeroID, 0, nil, errors.New("batch: unknown footer tag")
+		}
+		relayCaps = plain[off+1]
+	default:
+		return zeroID, 0, nil, fmt.Errorf("batch: trailing data (%d bytes)", rem)
+	}
+	return clientID, relayCaps, frames, nil
 }

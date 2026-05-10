@@ -357,7 +357,7 @@ func (c *Client) Shutdown(ctx context.Context) {
 	}
 	c.mu.Unlock()
 
-	body, err := frame.EncodeBatch(c.aead, c.clientID, rsts)
+	body, err := frame.EncodeBatch(c.aead, c.clientID, rsts, 0)
 	if err != nil {
 		log.Printf("[carrier] shutdown: encode failed: %v", err)
 		return
@@ -513,7 +513,7 @@ func (c *Client) pollOnce(ctx context.Context) bool {
 		}
 	}()
 
-	body, err := frame.EncodeBatch(c.aead, c.clientID, frames)
+	body, err := frame.EncodeBatch(c.aead, c.clientID, frames, 0)
 	if err != nil {
 		log.Printf("[carrier] failed to prepare encrypted request batch: %v", err)
 		return false
@@ -637,7 +637,7 @@ func (c *Client) pollOnce(ctx context.Context) bool {
 			return len(frames) > 0
 		}
 
-		_, rxFrames, decodeErr := frame.DecodeBatch(c.aead, respBody)
+		_, _, rxFrames, decodeErr := frame.DecodeBatch(c.aead, respBody)
 		if decodeErr != nil {
 			c.markEndpointFailure(endpointIdx)
 			if attempt < maxAttempts {

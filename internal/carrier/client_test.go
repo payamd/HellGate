@@ -26,7 +26,7 @@ func echoServer(t *testing.T, aead *frame.Crypto) (*httptest.Server, *int) {
 		hits++
 		mu.Unlock()
 		body, _ := io.ReadAll(r.Body)
-		clientID, in, err := frame.DecodeBatch(aead, body)
+		clientID, _, in, err := frame.DecodeBatch(aead, body)
 		if err != nil {
 			t.Errorf("server decode: %v", err)
 			w.WriteHeader(500)
@@ -44,7 +44,7 @@ func echoServer(t *testing.T, aead *frame.Crypto) (*httptest.Server, *int) {
 			})
 		}
 		mu.Unlock()
-		respBody, _ := frame.EncodeBatch(aead, clientID, out)
+		respBody, _ := frame.EncodeBatch(aead, clientID, out, 0)
 		w.Header().Set("Content-Type", "text/plain")
 		_, _ = w.Write(respBody)
 	}))
@@ -109,7 +109,7 @@ func TestCarrier_UnknownSessionFramesDropped(t *testing.T) {
 		var ghostClient [frame.ClientIDLen]byte
 		body, _ := frame.EncodeBatch(aead, ghostClient, []*frame.Frame{
 			{SessionID: unknown, Seq: 0, Payload: []byte("ghost")},
-		})
+		}, 0)
 		w.Header().Set("Content-Type", "text/plain")
 		_, _ = w.Write(body)
 	}))
@@ -258,7 +258,7 @@ func TestCarrier_PureDownloadIdleCap(t *testing.T) {
 
 		// Empty batch response — keeps the client in pure-download mode.
 		var clientID [frame.ClientIDLen]byte
-		body, _ := frame.EncodeBatch(aead, clientID, nil)
+		body, _ := frame.EncodeBatch(aead, clientID, nil, 0)
 		w.Header().Set("Content-Type", "text/plain")
 		_, _ = w.Write(body)
 	}))
@@ -350,7 +350,7 @@ func TestCarrier_IdleSlotsPerBucket(t *testing.T) {
 		mu.Unlock()
 
 		var clientID [frame.ClientIDLen]byte
-		body, _ := frame.EncodeBatch(aead, clientID, nil)
+		body, _ := frame.EncodeBatch(aead, clientID, nil, 0)
 		w.Header().Set("Content-Type", "text/plain")
 		_, _ = w.Write(body)
 	}))

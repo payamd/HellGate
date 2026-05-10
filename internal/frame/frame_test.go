@@ -140,7 +140,7 @@ func BenchmarkEncodeBatch_64Frames(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		if _, err := EncodeBatch(c, benchClient, in); err != nil {
+		if _, err := EncodeBatch(c, benchClient, in, 0); err != nil {
 			b.Fatalf("encode: %v", err)
 		}
 	}
@@ -153,7 +153,7 @@ func BenchmarkDecodeBatch_64Frames(b *testing.B) {
 	}
 	in := benchMarshalBatch(b, 64)
 	var benchClient [ClientIDLen]byte
-	body, err := EncodeBatch(c, benchClient, in)
+	body, err := EncodeBatch(c, benchClient, in, 0)
 	if err != nil {
 		b.Fatalf("encode: %v", err)
 	}
@@ -161,7 +161,7 @@ func BenchmarkDecodeBatch_64Frames(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		if _, _, err := DecodeBatch(c, body); err != nil {
+		if _, _, _, err := DecodeBatch(c, body); err != nil {
 			b.Fatalf("decode: %v", err)
 		}
 	}

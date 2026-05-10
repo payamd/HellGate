@@ -42,7 +42,7 @@ func invokeExitTunnel(tb testing.TB, s *Server, c *frame.Crypto, frames []*frame
 	tb.Helper()
 	var clientID [frame.ClientIDLen]byte
 	clientID[0] = 0x01 // distinguish from the all-zero "default" id
-	body, err := frame.EncodeBatch(c, clientID, frames)
+	body, err := frame.EncodeBatch(c, clientID, frames, 0)
 	if err != nil {
 		tb.Fatalf("encode request: %v", err)
 	}
@@ -165,7 +165,7 @@ func startMarkerServer(tb testing.TB, marker []byte, writeDelay time.Duration) (
 // decoded downstream frames the server replied with.
 func invokeAsClient(tb testing.TB, s *Server, c *frame.Crypto, clientID [frame.ClientIDLen]byte, frames []*frame.Frame) []*frame.Frame {
 	tb.Helper()
-	body, err := frame.EncodeBatch(c, clientID, frames)
+	body, err := frame.EncodeBatch(c, clientID, frames, 0)
 	if err != nil {
 		tb.Fatalf("encode: %v", err)
 	}
@@ -178,7 +178,7 @@ func invokeAsClient(tb testing.TB, s *Server, c *frame.Crypto, clientID [frame.C
 	if len(respBody) == 0 {
 		return nil
 	}
-	_, out, err := frame.DecodeBatch(c, respBody)
+	_, _, out, err := frame.DecodeBatch(c, respBody)
 	if err != nil {
 		tb.Fatalf("decode response: %v", err)
 	}
@@ -347,7 +347,7 @@ func TestExit_SYNDialsRunInParallel(t *testing.T) {
 	}
 
 	muteLogsForBench(t)
-	body, err := frame.EncodeBatch(c, clientID, frames)
+	body, err := frame.EncodeBatch(c, clientID, frames, 0)
 	if err != nil {
 		t.Fatalf("encode: %v", err)
 	}
@@ -426,7 +426,7 @@ func TestDrainAll_RespectsBatchFrameCap(t *testing.T) {
 		for id := range s.sessions {
 			s.sessionOwners[id] = owner
 		}
-		frames, _ := s.drainAll(owner, maxResponseBytesPreEncode)
+		frames, _ := s.drainAll(owner, 0, maxResponseBytesPreEncode)
 		expected := total
 		if expected > maxDrainFramesPerBatch {
 			expected = maxDrainFramesPerBatch
@@ -455,7 +455,7 @@ func TestDrainAll_RespectsBatchFrameCap(t *testing.T) {
 		for id := range s.sessions {
 			s.sessionOwners[id] = owner
 		}
-		frames, _ := s.drainAll(owner, maxResponseBytesPreEncode)
+		frames, _ := s.drainAll(owner, 0, maxResponseBytesPreEncode)
 		if len(frames) != maxDrainFramesPerBatchBusy {
 			t.Fatalf("expected busy cap %d frames, got %d", maxDrainFramesPerBatchBusy, len(frames))
 		}
@@ -492,7 +492,7 @@ func TestDrainAll_RespectsByteBudget(t *testing.T) {
 		s.txReady[id] = struct{}{}
 	}
 
-	frames, _ := s.drainAll(owner, maxResponseBytesPreEncode)
+	frames, _ := s.drainAll(owner, 0, maxResponseBytesPreEncode)
 	if len(frames) == 0 {
 		t.Fatal("drainAll returned no frames; test setup did not exercise the budget")
 	}

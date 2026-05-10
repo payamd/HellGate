@@ -268,7 +268,7 @@ func (s *Server) handleTunnel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	clientID, rxFrames, err := frame.DecodeBatch(s.aead, body)
+	clientID, relayCaps, rxFrames, err := frame.DecodeBatch(s.aead, body)
 	if err != nil {
 		s.stats.decodeFailures.Add(1)
 		// Decode failure on the very first batch from a client almost always
@@ -319,7 +319,7 @@ func (s *Server) handleTunnel(w http.ResponseWriter, r *http.Request) {
 	// while empty polls keep long-poll behavior for push responsiveness.
 	deadline := time.Now().Add(s.drainWindow(rxFrames))
 	for {
-		txFrames, urgent := s.drainAll(clientID, maxResponseBytesPreEncode)
+		txFrames, urgent := s.drainAll(clientID, relayCaps, maxResponseBytesPreEncode)
 		if len(txFrames) > 0 {
 			// Track running payload bytes so the coalesce loop respects the
 			// same response-size budget across multiple drainAll calls.
@@ -345,7 +345,7 @@ func (s *Server) handleTunnel(w http.ResponseWriter, r *http.Request) {
 					case <-r.Context().Done():
 						return
 					case <-wakeCh:
-						more, _ := s.drainAll(clientID, maxResponseBytesPreEncode-totalBytes)
+						more, _ := s.drainAll(clientID, relayCaps, maxResponseBytesPreEncode-totalBytes)
 						for _, f := range more {
 							totalBytes += len(f.Payload)
 						}
@@ -356,7 +356,7 @@ func (s *Server) handleTunnel(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 
-			respBody, err := frame.EncodeBatch(s.aead, clientID, txFrames)
+			respBody, err := frame.EncodeBatch(s.aead, clientID, txFrames, 0)
 			if err != nil {
 				log.Printf("[exit] encode response: %v", err)
 				w.WriteHeader(http.StatusInternalServerError)
@@ -376,7 +376,7 @@ func (s *Server) handleTunnel(w http.ResponseWriter, r *http.Request) {
 		remaining := time.Until(deadline)
 		if remaining <= 0 {
 			// Empty response (still a valid base64-encoded zero-frame batch).
-			respBody, _ := frame.EncodeBatch(s.aead, clientID, nil)
+			respBody, _ := frame.EncodeBatch(s.aead, clientID, nil, 0)
 			w.Header().Set("Content-Type", "text/plain")
 			_, _ = w.Write(respBody)
 			return
@@ -655,7 +655,7 @@ func (s *Server) openSession(id [frame.SessionIDLen]byte, target string, owner [
 // isolated: without it, whichever client's HTTP request reaches drainAll
 // first would receive every other client's downstream frames and silently
 // drop them, breaking every TLS stream in flight.
-func (s *Server) drainAll(owner [frame.ClientIDLen]byte, byteBudget int) ([]*frame.Frame, bool) {
+func (s *Server) drainAll(owner [frame.ClientIDLen]byte, relayCaps byte, byteBudget int) ([]*frame.Frame, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var out []*frame.Frame
@@ -676,6 +676,7 @@ func (s *Server) drainAll(owner [frame.ClientIDLen]byte, byteBudget int) ([]*fra
 	type sessionRef struct {
 		id       [frame.SessionIDLen]byte
 		queuedAt time.Time
+		tier     int
 	}
 	refs := make([]sessionRef, 0, len(s.txReady))
 	for id := range s.txReady {
@@ -683,12 +684,19 @@ func (s *Server) drainAll(owner [frame.ClientIDLen]byte, byteBudget int) ([]*fra
 			if s.sessionOwners[id] != owner {
 				continue
 			}
-			refs = append(refs, sessionRef{id: id, queuedAt: sess.FirstQueuedAt()})
+			refs = append(refs, sessionRef{
+				id:       id,
+				queuedAt: sess.FirstQueuedAt(),
+				tier:     tunnelDrainTierForTarget(sess.Target, relayCaps),
+			})
 		} else {
 			delete(s.txReady, id)
 		}
 	}
 	sort.Slice(refs, func(i, j int) bool {
+		if refs[i].tier != refs[j].tier {
+			return refs[i].tier < refs[j].tier
+		}
 		return refs[i].queuedAt.Before(refs[j].queuedAt)
 	})
 
@@ -737,20 +745,25 @@ func (s *Server) drainAll(owner [frame.ClientIDLen]byte, byteBudget int) ([]*fra
 
 	// UDP downstream: one logical datagram → one frame (FlagDATAGRAM).
 	type udpRef struct {
-		id [frame.SessionIDLen]byte
+		id   [frame.SessionIDLen]byte
+		tier int
 	}
 	udpRefs := make([]udpRef, 0, len(s.udpReady))
 	for id := range s.udpReady {
-		if _, ok := s.udpSessions[id]; !ok {
+		us, ok := s.udpSessions[id]
+		if !ok {
 			delete(s.udpReady, id)
 			continue
 		}
 		if s.sessionOwners[id] != owner {
 			continue
 		}
-		udpRefs = append(udpRefs, udpRef{id: id})
+		udpRefs = append(udpRefs, udpRef{id: id, tier: tunnelDrainTierForTarget(us.target, relayCaps)})
 	}
 	sort.Slice(udpRefs, func(i, j int) bool {
+		if udpRefs[i].tier != udpRefs[j].tier {
+			return udpRefs[i].tier < udpRefs[j].tier
+		}
 		return bytes.Compare(udpRefs[i].id[:], udpRefs[j].id[:]) < 0
 	})
 	for _, r := range udpRefs {

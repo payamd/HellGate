@@ -1,0 +1,36 @@
+# Example: HellGate container that **git clones a private repo** at startup using a PAT.
+#
+# Merge the `services.hellgate` block into `/root/docker-compose.yml`, **or**
+# use: docker compose -f docker-compose.yml -f HellGate/docker-compose.git-private.example.yml up -d hellgate
+# (adapt paths.)
+#
+# 1. Create a GitHub fine-grained token or PAT with **Contents: Read** on repo `HellGate`.
+# 2. On the VPS ONLY (never commit):
+#      echo 'GITHUB_TOKEN=ghp_xxxxx' > /root/.env && chmod 600 /root/.env
+#    Or: export GITHUB_TOKEN=... in shell before docker compose up.
+#
+# SECURITY: Prefer `docker compose build` + `context: ./HellGate` (no token in URLs).
+# This file exists only when cloning from GitHub inside the container is required.
+
+services:
+  hellgate:
+    image: golang:1.22-alpine
+    container_name: hellgate
+    working_dir: /app
+    environment:
+      GITHUB_TOKEN: ${GITHUB_TOKEN}
+    command:
+      - sh
+      - -c
+      - |
+          set -eu
+          apk add --no-cache git
+          rm -rf /app/src
+          git clone -b main "https://x-access-token:$${GITHUB_TOKEN}@github.com/payamd/HellGate.git" /app/src
+          cd /app/src
+          CGO_ENABLED=0 go build -trimpath -o /app/hellgate-server ./cmd/server
+          exec /app/hellgate-server -config /app/config/server_config.json
+    ports:
+      - "9443:9443"
+    volumes:
+      - ./HellGate/config:/app/config:ro

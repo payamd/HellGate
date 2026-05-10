@@ -1,4 +1,5 @@
 # Local secrets (never commit)
+.env
 /server_config.json
 /config/server_config.json
 /client_config.json
