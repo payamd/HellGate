@@ -55,12 +55,12 @@ const (
 	// MaxFramePayload caps the bytes per downstream frame (matches Demonica
 	// Session chunking and internal/carrier/client.go). 256KiB was tried for
 	// throughput but widened head-of-line blocking under fan-out (feeds + calls).
-	MaxFramePayload = 128 * 1024
+	MaxFramePayload = 144 * 1024
 
 	// upstreamReadBuf is the chunk size for reading from real net.Conn before
 	// pushing to session.EnqueueTx (which then chunks into frames). Matches
 	// MaxFramePayload so a single TCP read fills at most one max-sized frame.
-	upstreamReadBuf = 128 * 1024
+	upstreamReadBuf = 144 * 1024
 
 	// coalesceWindow lets us gather a few more frames before responding, which
 	// improves throughput for video streams under higher RTT links.

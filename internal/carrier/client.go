@@ -21,7 +21,7 @@ import (
 const (
 	// MaxFramePayload caps the bytes per frame; larger writes are chunked.
 	// Matches exit.Server defaults; Demonica carrier chunks SOCKS TCP the same way.
-	MaxFramePayload = 128 * 1024
+	MaxFramePayload = 144 * 1024
 
 	// pollIdleSleep is the breather between polls when nothing is happening.
 	// 10ms instead of 50ms: keeps workers responsive to kick() misses and
