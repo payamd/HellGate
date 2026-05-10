@@ -645,6 +645,69 @@ func (s *Server) openSession(id [frame.SessionIDLen]byte, target string, owner [
 	return sess, nil
 }
 
+type tcpDrainRef struct {
+	id       [frame.SessionIDLen]byte
+	queuedAt time.Time
+	tier     int
+}
+
+// interleaveTCPDrainRefsFair turns strict tier-0-first ordering into (R,N,…)+N...+R+
+// tails so multiplexed egress cannot starve DNS / edge CDNs behind Meta storms.
+func interleaveTCPDrainRefsFair(refs []tcpDrainRef) []tcpDrainRef {
+	var rt, nm []tcpDrainRef
+	for _, r := range refs {
+		if r.tier == tunnelTierRealtime {
+			rt = append(rt, r)
+		} else {
+			nm = append(nm, r)
+		}
+	}
+	if len(rt) == 0 || len(nm) == 0 {
+		return refs
+	}
+	out := make([]tcpDrainRef, 0, len(refs))
+	n := len(rt)
+	if len(nm) < n {
+		n = len(nm)
+	}
+	for i := 0; i < n; i++ {
+		out = append(out, rt[i], nm[i])
+	}
+	out = append(out, nm[n:]...)
+	out = append(out, rt[n:]...)
+	return out
+}
+
+type udpDrainRef struct {
+	id   [frame.SessionIDLen]byte
+	tier int
+}
+
+func interleaveUDPDrainRefsFair(refs []udpDrainRef) []udpDrainRef {
+	var rt, nm []udpDrainRef
+	for _, r := range refs {
+		if r.tier == tunnelTierRealtime {
+			rt = append(rt, r)
+		} else {
+			nm = append(nm, r)
+		}
+	}
+	if len(rt) == 0 || len(nm) == 0 {
+		return refs
+	}
+	out := make([]udpDrainRef, 0, len(refs))
+	n := len(rt)
+	if len(nm) < n {
+		n = len(nm)
+	}
+	for i := 0; i < n; i++ {
+		out = append(out, rt[i], nm[i])
+	}
+	out = append(out, nm[n:]...)
+	out = append(out, rt[n:]...)
+	return out
+}
+
 // drainAll returns all currently-buffered TX frames belonging to owner, plus
 // an `urgent` flag signalling that at least one drained session is delivering
 // its first downstream batch (e.g. TLS server hello after SYN). The caller
@@ -672,19 +735,15 @@ func (s *Server) drainAll(owner [frame.ClientIDLen]byte, relayCaps byte, byteBud
 	remaining := batchCap
 	remainingBytes := byteBudget
 
-	// Snapshot and sort active sessions by queue age to ensure fairness.
-	type sessionRef struct {
-		id       [frame.SessionIDLen]byte
-		queuedAt time.Time
-		tier     int
-	}
-	refs := make([]sessionRef, 0, len(s.txReady))
+	// Snapshot TCP sessions then sort inside each tier; interleave realtime vs normal
+	// so pure tier-0 fan-out can't starve resolvers/CDNs needed for IG/others.
+	refs := make([]tcpDrainRef, 0, len(s.txReady))
 	for id := range s.txReady {
 		if sess, ok := s.sessions[id]; ok {
 			if s.sessionOwners[id] != owner {
 				continue
 			}
-			refs = append(refs, sessionRef{
+			refs = append(refs, tcpDrainRef{
 				id:       id,
 				queuedAt: sess.FirstQueuedAt(),
 				tier:     tunnelDrainTierForTarget(sess.Target, relayCaps),
@@ -699,6 +758,7 @@ func (s *Server) drainAll(owner [frame.ClientIDLen]byte, relayCaps byte, byteBud
 		}
 		return refs[i].queuedAt.Before(refs[j].queuedAt)
 	})
+	refs = interleaveTCPDrainRefsFair(refs)
 
 	for _, r := range refs {
 		id := r.id
@@ -744,11 +804,7 @@ func (s *Server) drainAll(owner [frame.ClientIDLen]byte, relayCaps byte, byteBud
 	}
 
 	// UDP downstream: one logical datagram → one frame (FlagDATAGRAM).
-	type udpRef struct {
-		id   [frame.SessionIDLen]byte
-		tier int
-	}
-	udpRefs := make([]udpRef, 0, len(s.udpReady))
+	udpRefs := make([]udpDrainRef, 0, len(s.udpReady))
 	for id := range s.udpReady {
 		us, ok := s.udpSessions[id]
 		if !ok {
@@ -758,7 +814,7 @@ func (s *Server) drainAll(owner [frame.ClientIDLen]byte, relayCaps byte, byteBud
 		if s.sessionOwners[id] != owner {
 			continue
 		}
-		udpRefs = append(udpRefs, udpRef{id: id, tier: tunnelDrainTierForTarget(us.target, relayCaps)})
+		udpRefs = append(udpRefs, udpDrainRef{id: id, tier: tunnelDrainTierForTarget(us.target, relayCaps)})
 	}
 	sort.Slice(udpRefs, func(i, j int) bool {
 		if udpRefs[i].tier != udpRefs[j].tier {
@@ -766,6 +822,7 @@ func (s *Server) drainAll(owner [frame.ClientIDLen]byte, relayCaps byte, byteBud
 		}
 		return bytes.Compare(udpRefs[i].id[:], udpRefs[j].id[:]) < 0
 	})
+	udpRefs = interleaveUDPDrainRefsFair(udpRefs)
 	for _, r := range udpRefs {
 		id := r.id
 		if remaining <= 0 || remainingBytes <= 0 {
